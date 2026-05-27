@@ -131,6 +131,31 @@ array = slurp.submit_array(
 
 ---
 
+## `JobStatus` enum
+
+```python
+class JobStatus(Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    TIMEOUT = "TIMEOUT"
+    UNKNOWN = "UNKNOWN"
+```
+
+- **PENDING** — Job is queued and awaiting resource allocation.
+- **RUNNING** — Job has been allocated nodes and is executing.
+- **COMPLETED** — Job finished with exit code 0.
+- **FAILED** — Job finished with a non-zero exit code or was terminated by an error.
+- **CANCELLED** — Job was explicitly cancelled via `scancel` (by slurp or another user).
+- **TIMEOUT** — Job exceeded its `--time` limit and was killed by SLURM.
+- **UNKNOWN** — SLURM did not return state information (e.g., job purged from `sacct` database). This is rare and triggers a warning.
+
+`UNKNOWN` is never assigned optimistically; it is only set during reconciliation when a previously tracked job disappears from SLURM accounting. Terminal states (`COMPLETED`, `FAILED`, `CANCELLED`, `TIMEOUT`) are final and never overwritten by non-terminal states.
+
+---
+
 ## `Job` class
 
 ```python

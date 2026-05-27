@@ -289,6 +289,30 @@ The top-level mapping is used for O(1) duplicate detection. When a new submissio
 
 ---
 
+## Corruption Recovery
+
+If `jobs.json` is corrupted (invalid JSON, truncated, or zero-length), slurp detects this on the next read and recovers gracefully.
+
+**Detection:**
+Every read attempt parses the file with `json.load()`. If parsing raises `JSONDecodeError` or `UnicodeDecodeError`, the file is flagged as corrupt.
+
+**Recovery:**
+1. Parse error is logged as a warning: `Job store corrupted; rebuilding from SLURM.`
+2. The corrupt file is moved to `jobs.json.corrupt.<timestamp>` for forensic inspection.
+3. A fresh empty store (`{"jobs": {}, "log_offsets": {}, "idempotency": {}}`) is created atomically.
+4. `slurp list` triggers an immediate `sacct` reconciliation, repopulating the `jobs` section with all jobs still visible in SLURM accounting.
+5. Log offsets and idempotency hashes are lost, but job metadata is restored. Log streaming resumes from offset 0 (inefficient but correct). Idempotency deduplication is reset, so a duplicate submission within the window may not be caught until the store is repopulated.
+
+**Prevention:**
+Atomic writes (temp file + `os.rename()`) make on-disk corruption extremely unlikely. The only corruption vectors are:
+- Power loss or kernel panic between `os.rename()` and `fsync()` (extremely rare; modern filesystems journal metadata).
+- A bug in slurp producing malformed JSON (caught by CI tests).
+- User manually editing `jobs.json` and introducing syntax errors.
+
+In all cases, recovery is automatic and non-destructive: the corrupt file is preserved, and operation continues after reconciliation.
+
+---
+
 ## Summary of Guarantees
 
 | Property | Guarantee | Implementation |
