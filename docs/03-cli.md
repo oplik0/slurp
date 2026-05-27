@@ -1,566 +1,476 @@
-# 03 — CLI Specification (v0.1)
+# 03 — CLI Specification
 
-## 1. Argument Parsing & Command Separation
+## 1. Global Options
 
-`slurp` uses a hybrid argument parser (Typer + custom post-processing) designed to feel natural for researchers who pass flags to both `slurp` and their training scripts.
+Every `slurp` command accepts the following global flags:
 
-### The `--` Separator
+```
+--profile NAME      Use profile NAME from ~/.config/slurp/profiles.toml
+--experiment EXP    Tag all jobs in this invocation with experiment name EXP
+--verbose, -v       Increase log verbosity (can be repeated: -vv)
+--dry-run           Show generated SBATCH script and exit without submitting
+--help              Show help for the current command
+```
 
-Arguments after `--` are **always** treated as the user's command, even if they look like `slurp` flags:
+**Default profile resolution:** If `--profile` is omitted, `slurp` tries `default` profile, then the first profile in the file, then interactive fallback.
+
+**Experiment tag:** The `--experiment` string is stored in the local job cache and passed to SLURM via `--comment`. It is used by `watch`, `list`, and `cancel-all` as a filter key. It has no semantic meaning to SLURM.
+
+---
+
+## 2. Argument Parsing Rules
+
+`slurp` distinguishes between **slurp flags** and **user command arguments** using two mechanisms:
+
+### 2.1 Explicit separator: `--`
+
+Everything after `--` is treated as the user's command verbatim. Slurp flags must appear before `--`.
 
 ```bash
-# Explicit separation (recommended for clarity)
-slurp submit --gpus 4 -- python train.py --lr 0.01 --time 10
-#                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-#                              user's command; --time is NOT a slurp flag
+slurp submit --gpus 4 --time 2:00:00 -- python train.py --lr 0.01 --time 10
+# slurp sees:   gpus=4, time="2:00:00"
+# user command: python train.py --lr 0.01 --time 10
+```
 
-# Implicit separation (works when the command starts with a non-flag token)
+**Edge case:** If `--` appears multiple times, only the first `--` is the separator; subsequent `--` tokens are part of the user command.
+
+### 2.2 Trailing positional arguments (no `--`)
+
+If no `--` is present, all positional arguments after the last recognized slurp flag are treated as the user command.
+
+```bash
 slurp submit --gpus 4 python train.py --lr 0.01
-#                           ^^^^^^^^^^^^^^^^^^^^
-#                           trailing positional args become the command
+# slurp sees:   gpus=4
+# user command: python train.py --lr 0.01
 ```
 
-### Parsing Rules
-
-1. **Flags before `--`** are consumed by `slurp`. Unknown flags raise `typer.BadParameter` immediately.
-2. **Flags after `--`** are untouched and passed verbatim to the remote shell.
-3. **If no `--` is present**, all tokens after the last recognized `slurp` flag are treated as the command.
-4. **Ambiguity resolution:** If a trailing positional arg matches a `slurp` flag name (e.g., `python train.py --time 10` without `--`), the parser uses the *first* occurrence of a known flag as the split point. To avoid ambiguity, always use `--` when the user's command contains tokens that look like slurp flags.
-
-### Edge Case: No Command Provided
+**Edge case:** If a positional argument looks like a flag but is meant for the user command (e.g. a script that takes `--config`), the user must use `--` to avoid ambiguity.
 
 ```bash
-$ slurp submit --gpus 4
-Error: Missing command. Provide a command after `--` or as trailing arguments.
-Hint: slurp submit --gpus 4 -- python train.py
-Exit code: 2
+slurp submit --gpus 4 python train.py --config cfg.yaml   # DANGEROUS: --config may be parsed by slurp
+slurp submit --gpus 4 -- python train.py --config cfg.yaml  # SAFE
 ```
+
+**Failure mode:** Typer (the CLI framework) raises a `BadParameter` error before slurp code runs. The error message indicates which flag is unknown and suggests using `--`.
 
 ---
 
-## 2. Resource Flags & SLURM Mapping
+## 3. Resource Flags (Flat Design)
 
-All resource flags are flat — there is no "Simple/Standard/Advanced" tier. Every flag maps to exactly one SBATCH directive or CLI passthrough.
+All resource flags are top-level options. There are no "Simple / Standard / Advanced" tiers.
 
-| `slurp` Flag | SLURM Directive | Default | Notes |
-|--------------|-----------------|---------|-------|
-| `--gpus N` | `--gres=gpu:N` (JURECA) or `--gpus=N` (generic) | `0` | Cluster detected via profile hostname pattern |
-| `--nodes N` | `--nodes=N` | `1` | Must be ≥ 1 |
-| `--time T` | `--time=T` | `2:00:00` | Format: `[[HH:]MM:]SS` or `D-HH:MM:SS` |
-| `--mem M` | `--mem=M` | `32G` | Accepts `G`, `M`, `T` suffixes |
-| `--cpus N` | `--cpus-per-task=N` | `8` | Per-task CPUs |
-| `--partition P` | `--partition=P` | profile default | Prompted on first run if missing |
-| `--constraint C` | `--constraint=C` | none | Hardware constraint string |
-| `--qos Q` | `--qos=Q` | none | Quality-of-service class |
-| `--account A` | `--account=A` | profile default | Required on most clusters |
+| Flag | SLURM Mapping | Default | Validation |
+|------|---------------|---------|------------|
+| `--gpus N` | `--gres=gpu:N` (JURECA) or `--gpus=N` | `0` | `N >= 0` |
+| `--nodes N` | `--nodes=N` | `1` | `N >= 1` |
+| `--time T` | `--time=T` | `"2:00:00"` | SLURM duration format |
+| `--mem M` | `--mem=M` | profile default or `0` (unlimited) | e.g. `16G`, `16384` |
+| `--cpus N` | `--cpus-per-task=N` | `8` | `N >= 1` |
+| `--partition P` | `--partition=P` | profile default | non-empty string |
+| `--constraint C` | `--constraint=C` | none | string |
+| `--qos Q` | `--qos=Q` | none | string |
+| `--account A` | `--account=A` | profile default | non-empty string |
 | `--mail-type T` | `--mail-type=T` | none | `BEGIN`, `END`, `FAIL`, `ALL` |
-| `--slurm-kwargs K=V` | `--K=V` | none | Passthrough; can be repeated |
-| `--name N` | `--job-name=N` | auto-generated | Slugified to `[a-zA-Z0-9_-]+` |
-| `--experiment E` | injected into job metadata | none | Filter tag for `watch` / `list` |
-| `--snapshot` | triggers `rsync` + remote copy | `false` | Copies tree to `$PROJECT/.slurp/runs/<job_id>/` |
+| `--job-name NAME` | `--job-name=NAME` | derived from command | slugified to `[a-zA-Z0-9_-]+` |
+| `--slurm-kwargs K=V` | passthrough | none | can be repeated |
 
-### `--slurm-kwargs` Examples
+**`--slurm-kwargs` passthrough:** Any SBATCH directive not covered by the flags above can be injected directly. This is the escape hatch for cluster-specific or rarely-used directives.
 
 ```bash
-# Single passthrough
-slurp submit --slurm-kwargs exclude=node05 python train.py
-
-# Multiple passthroughs
-slurp submit --slurm-kwargs constraint=a100 --slurm-kwargs ntasks-per-node=8 python train.py
+slurp submit python train.py --slurm-kwargs exclude=node05 --slurm-kwargs ntasks-per-node=2
 ```
+
+**Failure mode:** If a `--slurm-kwargs` key conflicts with an explicit slurp flag (e.g. `--gpus 4` and `--slurm-kwargs gres=gpu:2`), the behavior is undefined and a warning is emitted. The explicit flag wins in practice, but users should not rely on this.
 
 ---
 
-## 3. Command Reference
+## 4. Command Reference
 
-### 3.1 `slurp submit`
+### 4.1 `slurp submit`
 
-**Syntax:**
+**Synopsis:**
 ```
-slurp submit [OPTIONS] [--] <command...>
+slurp submit [OPTIONS] [--] <command>...
 ```
 
-**Purpose:** Fire-and-forget job submission. Returns immediately after `sbatch` succeeds.
+**Description:** Fire-and-forget job submission. Syncs code via rsync, generates an SBATCH script, submits it to SLURM, and returns immediately with the job ID.
 
-**Flags:** All resource flags from §2, plus:
-- `--wait` — block until job reaches terminal state (internal flag; prefer `slurp run`)
-- `--follow-logs` — stream logs while waiting (internal flag; prefer `slurp run`)
-- `--profile P` — use profile `P` instead of default
-- `--working-dir PATH` — remote working directory (default: profile `sync.remote` or current directory name)
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Job submitted successfully |
-| 1 | `sbatch` failed (SLURM rejected the job) |
-| 2 | Argument parsing error (missing command, invalid flag) |
-| 3 | `rsync` failed (code not synced; job not submitted) |
-| 10 | SSH connection failed (retryable) |
-| 130 | User interrupted (Ctrl+C) |
+**Workflow:**
+1. Resolve profile and working directory.
+2. Sync local code to remote (`rsync -avz --delete --filter=':- .gitignore'`).
+3. Generate SBATCH script (directives + profile prologue + user command).
+4. Run `sbatch` on the login node.
+5. Store job metadata locally.
+6. Print `Job <id> submitted.`
 
 **Examples:**
-
 ```bash
-# Basic usage
+# Basic submit
 slurp submit python train.py --lr 0.01 --gpus 4
 
-# Explicit separator with training flags that look like slurp flags
-slurp submit --gpus 4 --nodes 2 -- python train.py --time 10 --lr 0.01
+# With explicit time and partition override
+slurp submit --time 4:00:00 --partition dc-gpu-debug python train.py --gpus 4
 
-# Using a non-default profile
-slurp submit --profile helga --gpus 8 python train.py
+# Snapshot for reproducibility
+slurp submit --snapshot python train.py --gpus 4
 
-# Snapshot mode for reproducibility
-slurp submit --snapshot --experiment exp_v1 python train.py
-
-# Full resource override
-slurp submit --gpus 4 --nodes 2 --time 4:00:00 --mem 128G --partition dc-gpu \
-  -- python train.py --batch-size 64
+# Dry-run: preview script without submitting
+slurp submit --dry-run --gpus 4 python train.py
 ```
 
-**Error handling:**
-- If `rsync` fails (e.g., disk quota exceeded), the job is **not** submitted. The CLI prints the `rsync` stderr and exits with code 3.
-- If `sbatch` returns a non-zero exit code, `slurp` parses the stderr for known SLURM errors (invalid account, invalid partition, QoS violation) and raises the corresponding `SlurmError` with a actionable hint.
-- If the SSH control master is dead, `slurp` auto-respawns it with exponential backoff (1s, 2s, 4s, max 30s). If all retries fail, exits with code 10.
-
----
-
-### 3.2 `slurp run`
-
-**Syntax:**
-```
-slurp run [OPTIONS] [--] <command...>
-```
-
-**Purpose:** Blocking submit with live log streaming. Equivalent to `slurp submit --wait --follow-logs`.
-
-**Behavior:**
-1. Submit the job via `sbatch`
-2. Start incremental log tailing (`tail -c +offset` every 2s)
-3. Poll `sacct` every 5s for terminal state
-4. On terminal state: print final status and exit with the job's exit code
-5. On SSH disconnect: reconnect via control master, resume from last log offset
+**Options:** All resource flags (see §3), plus `--snapshot` and `--dry-run`.
 
 **Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Job completed successfully |
-| 1 | Job failed (non-zero exit code from user script) |
-| 2 | Argument parsing error |
-| 3 | `rsync` failed |
-| 10 | SSH connection failed |
-| 124 | Timeout (`--timeout` exceeded) |
-| 130 | User interrupted (Ctrl+C) — cancels the job unless `--no-cancel-on-sigint` |
+- `0` — Job submitted successfully.
+- `1` — `SlurmError` (e.g. invalid account, partition not found).
+- `2` — `SSHError` (login node unreachable).
+- `3` — `SyncError` (rsync failed, e.g. disk quota exceeded on remote).
+- `4` — Idempotency warning (duplicate spec within 30s; user declined resubmit).
+- `10` — Profile missing and interactive fallback failed (non-TTY).
+
+**Edge cases:**
+- **Dirty git repo:** A warning is printed but submission proceeds. The user is trusted to decide whether uncommitted changes are intentional.
+- **No GPUs requested (`--gpus 0`):** The job runs on CPU nodes. The `--gres=gpu:0` directive is omitted from the generated script.
+- **Existing `.sbatch` script submitted:** If the user command is a file ending in `.sh` or `.sbatch` containing `#SBATCH` lines, slurp detects it and prepends missing directives rather than generating a wrapper script.
+
+---
+
+### 4.2 `slurp run`
+
+**Synopsis:**
+```
+slurp run [OPTIONS] [--] <command>...
+```
+
+**Description:** Blocking submit with live log streaming. Internally: `slurp submit` + `job.wait(follow_logs=True)`. The command does not return until the job reaches a terminal state.
+
+**Workflow:**
+1. Submit the job (same as `slurp submit`).
+2. Start incremental log tailing (`tail -c +offset`, 2-second interval).
+3. Poll `sacct` every 5 seconds for terminal state.
+4. On terminal state: print final status and exit with the job's exit code.
+5. On SSH drop: reconnect via control master, resume from last log offset.
 
 **Examples:**
-
 ```bash
-# Standard blocking run
+# Run and stream logs until completion
 slurp run python train.py --gpus 4
 
-# With timeout (fails if job runs longer than 2 hours)
-slurp run --timeout 2h python train.py
-
-# Do not cancel on Ctrl+C (allow job to continue)
-slurp run --no-cancel-on-sigint python train.py
+# With timeout (raises error if job exceeds duration)
+slurp run --time 2:00:00 python train.py --gpus 4
 ```
 
-**Error handling:**
-- If the user's script exits non-zero, `slurp run` exits with the same code and prints the last 50 lines of stderr.
-- If the job is killed by SLURM (OOM, timeout, node failure), `slurp run` exits with code 1 and prints the `sacct`-derived reason (`OUT_OF_MEMORY`, `TIMEOUT`, `NODE_FAIL`).
+**Exit codes:**
+- `0` — Job completed successfully (SLURM exit code 0).
+- `N` — Job failed with SLURM exit code N (1–255).
+- `1` — `SlurmError` during submission.
+- `2` — `SSHError` during streaming (reconnect exhausted).
+- `124` — `slurp run` itself timed out waiting (if a local `--timeout` flag is added).
+
+**Edge cases:**
+- **Ctrl+C during `slurp run`:** The local `tail` stream stops, but the remote job continues running. A message is printed: `Detached from log stream. Job 12345 is still RUNNING. Use "slurp logs 12345 --follow" to reattach.`
+- **SSH drops during long training:** The control master auto-respawns. If the control master cannot be respawned within the retry budget (4 attempts, max 30s backoff), `SSHError` is raised and `slurp run` exits. The remote job is unaffected.
 
 ---
 
-### 3.3 `slurp submit-array`
+### 4.3 `slurp submit-array`
 
-**Syntax:**
+**Synopsis:**
 ```
-slurp submit-array [OPTIONS] [--] <command_template...>
-slurp submit-array [OPTIONS] [--] <command> --<param> v1,v2,v3
+slurp submit-array [OPTIONS] [--] <command>...
+slurp submit-array [OPTIONS] "<command with {placeholder}>" --<key> v1,v2,v3
 ```
 
-**Purpose:** Submit a SLURM job array where each task runs the command with a different parameter value.
+**Description:** Submit a SLURM job array where each task runs the same command with a different parameter value. Native SLURM arrays (`--array=0-N%M`) are used internally.
 
-**Flags:** All resource flags from §2, plus:
-- `--throttle N` — max concurrent tasks (default: 20, maps to `%20`)
-
-**Array generation rules:**
-- If the command contains `{param}` placeholders, they are expanded per task.
-- If no placeholders are found, `slurp` generates a wrapper script that exports environment variables `SEED`, `LR`, etc. based on the comma-separated values.
-- Log files: `slurm-<name>-<array_job_id>_<task_id>.out`
-
-**Examples:**
+**Parameter sweep syntax:**
 
 ```bash
-# Template syntax
-slurp submit-array "python train.py --seed {seed}" --seed 1,2,3,4,5 --gpus 4
-
-# Implicit wrapper generation
+# Implicit: flags ending in comma-separated lists become array parameters
 slurp submit-array python train.py --seed 1,2,3,4,5 --gpus 4
-# Internally generates wrapper that sets seed=${SEEDS[$SLURM_ARRAY_TASK_ID]}
+# Generates --array=0-4%20, wrapper script sets seed=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 
-# Throttle concurrent tasks
-slurp submit-array --throttle 10 python train.py --lr 0.001,0.01,0.1 --gpus 4
+# Explicit template syntax
+slurp submit-array "python train.py --seed {seed}" --seed 1,2,3,4,5 --gpus 4
 ```
 
-**Exit codes:** Same as `slurp submit`, plus:
-| Code | Meaning |
-|------|---------|
-| 4 | Invalid array parameter (empty list, mismatched lengths) |
+**Options:** All resource flags from `submit`, plus:
+- `--throttle N` — Max concurrent tasks (default: `20`). Maps to `%N` in `--array`.
 
-**Error handling:**
-- Mismatched parameter list lengths raise a parser error before any remote call.
-- If one array task fails, `slurp` still submits the full array. Use `slurp watch` or `slurp logs` to inspect individual tasks.
+**Exit codes:** Same as `submit`, plus:
+- `5` — Invalid sweep specification (e.g. mismatched list lengths, placeholder not found in command).
+
+**Edge cases:**
+- **Multiple sweep parameters:** If two or more flags receive comma-separated lists, they must be the same length. A Cartesian product is not supported in v0.1.
+- **Zero tasks:** If all parameter lists are empty, the command raises `SlurmError` before calling `sbatch`.
+- **Log files:** Per-task logs are named `slurm-<job_name>-<array_job_id>_<task_id>.out` and `.err`.
 
 ---
 
-### 3.4 `slurp watch`
+### 4.4 `slurp watch`
 
-**Syntax:**
+**Synopsis:**
 ```
 slurp watch [OPTIONS]
 ```
 
-**Purpose:** Live table of all tracked jobs, updated every 2–5s.
+**Description:** Live table of all tracked jobs. Uses `rich.live.Live` to refresh every 2–5 seconds. Shows job name, status, experiment, elapsed time, and latest progress metrics (if `progress.jsonl` exists).
 
-**Flags:**
-- `--experiment E` — filter to jobs tagged with experiment `E`
-- `--refresh N` — poll interval in seconds (default: 5)
-- `--no-progress` — hide `progress.jsonl` columns
+**Options:**
+- `--experiment EXP` — Filter to jobs tagged with experiment `EXP`.
+- `--refresh SEC` — Poll interval in seconds (default: `5`).
 
-**Display columns:**
-| Column | Source |
-|--------|--------|
-| Job ID | `sacct` |
-| Name | Job metadata |
-| Status | `sacct` (`PENDING`, `RUNNING`, `COMPLETED`, etc.) |
-| Partition | `sacct` |
-| GPUs | Resource request |
-| Time elapsed | `sacct` |
-| Step / Total | `progress.jsonl` (if present) |
-| Latest metric | `progress.jsonl` (last `metrics` dict) |
+**Examples:**
+```bash
+slurp watch
+slurp watch --experiment exp_v1
+slurp watch --refresh 2
+```
 
 **Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | User quit (`q` or Ctrl+C) |
-| 10 | SSH connection lost and could not reconnect |
+- `0` — User quit watch (Ctrl+C or `q`).
+- `2` — `SSHError` (sacct query failed; table shows cached data with stale indicator).
 
-**Error handling:**
-- If SSH drops, `watch` attempts to respawn the control master once. If that fails, it prints a stale snapshot and exits with code 10.
-- Jobs not found in `sacct` are shown as `UNKNOWN` with a `?` indicator.
+**Edge cases:**
+- **No jobs tracked:** Table is empty with a message: `No jobs in local cache. Submit a job with "slurp submit" or run "slurp list" to reconcile.`
+- **Stale data indicator:** If `sacct` fails for >2 consecutive polls, the status column shows `(stale)` in yellow.
 
 ---
 
-### 3.5 `slurp logs`
+### 4.5 `slurp logs`
 
-**Syntax:**
+**Synopsis:**
 ```
 slurp logs [OPTIONS] <job_id>
 ```
 
-**Purpose:** Print stdout/stderr of a job.
+**Description:** Print stdout/stderr of a job. Supports one-shot tail (`--tail N`) or live follow (`--follow`).
 
-**Flags:**
-- `--follow, -f` — blocking tail (like `tail -f`)
-- `--tail N` — print last N lines (default: 100)
-- `--stderr` — show stderr instead of stdout
-- `--task-id N` — for array jobs, show logs of task `N`
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Log output printed successfully |
-| 5 | Job ID not found in local store or SLURM |
-| 10 | SSH connection failed |
+**Options:**
+- `--follow, -f` — Block and stream new log lines as they are written (uses `tail -F` over SSH).
+- `--tail N` — Print last N lines (default: `100`). Ignored if `--follow` is set.
+- `--stderr` — Print stderr instead of stdout.
 
 **Examples:**
-
 ```bash
-# Last 100 lines of stdout
 slurp logs 12345
-
-# Follow live output
 slurp logs 12345 --follow
-
-# Array task stderr
-slurp logs 12345 --task-id 3 --stderr --follow
+slurp logs 12345 --tail 20 --stderr
 ```
 
-**Error handling:**
-- If the log file does not exist yet (job is `PENDING`), `slurp` prints a warning and waits up to 30s for the file to appear (when following).
-- On disconnect during `--follow`, `slurp` persists the byte offset to `~/.local/share/slurp/log_offsets.json` and resumes on reconnect.
+**Exit codes:**
+- `0` — Log printed successfully.
+- `1` — Job ID not found in local cache or SLURM.
+- `2` — `SSHError` during file read.
+
+**Edge cases:**
+- **Log file does not exist yet:** If the job is still PENDING, the log file may not have been created. The command prints `Log file not yet created. Job 12345 is PENDING.` and exits with code `0`.
+- **Follow + disconnect:** If SSH drops during `--follow`, the offset is persisted to `~/.local/share/slurp/log_offsets.json`. The next `slurp logs --follow` resumes from the offset.
+- **Array job logs:** For array jobs, `slurp logs 12345` prints the base job log (usually empty). To read a task log, use `slurp logs 12345_2` (task ID appended with underscore).
 
 ---
 
-### 3.6 `slurp status`
+### 4.6 `slurp status`
 
-**Syntax:**
+**Synopsis:**
 ```
 slurp status <job_id>
 ```
 
-**Purpose:** One-shot status query for a single job. Prints a Rich panel with all metadata.
+**Description:** Print detailed status of a single job: SLURM state, exit code (if terminal), wall time, max RSS, and node list.
+
+**Examples:**
+```bash
+slurp status 12345
+```
 
 **Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Query succeeded |
-| 5 | Job ID not found |
-| 10 | SSH connection failed |
+- `0` — Status retrieved.
+- `1` — Job ID not found.
+- `2` — `SSHError`.
 
-**Output format:**
-```
-┌──────── Job 12345 ─────────┐
-│ Name:       train          │
-│ Status:     RUNNING        │
-│ Partition:  dc-gpu         │
-│ Nodes:      2              │
-│ GPUs:       8              │
-│ Time:       01:23:45       │
-│ Exit code:  —              │
-└────────────────────────────┘
-```
+**Edge cases:**
+- **Job not in local cache but known to SLURM:** The command queries `sacct` directly and prints the status. It does not add the job to the local cache (only `list` and `watch` reconcile).
 
 ---
 
-### 3.7 `slurp list`
+### 4.7 `slurp list`
 
-**Syntax:**
+**Synopsis:**
 ```
 slurp list [OPTIONS]
 ```
 
-**Purpose:** List all tracked jobs. Non-interactive; suitable for scripts.
+**Description:** Print a table of all tracked jobs. Reconciles local cache against `sacct` before rendering. Supports filtering by experiment and status.
 
-**Flags:**
-- `--experiment E` — filter by experiment
-- `--status S` — filter by status (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, etc.)
-- `--json` — output as JSON (one object per line)
-- `--limit N` — max rows (default: 50)
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | List printed |
-| 10 | SSH connection failed |
+**Options:**
+- `--experiment EXP` — Filter by experiment tag.
+- `--status S` — Filter by status (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`, `TIMEOUT`).
+- `--limit N` — Max rows to show (default: `50`).
 
 **Examples:**
-
 ```bash
-# Human-readable table
 slurp list
-
-# JSON for downstream processing
-slurp list --experiment exp_v1 --status RUNNING --json | jq '.job_id'
-
-# Recently failed jobs
-slurp list --status FAILED --limit 10
+slurp list --experiment exp_v1 --status RUNNING
+slurp list --limit 10
 ```
+
+**Exit codes:**
+- `0` — Table printed (may be empty).
+- `2` — `SSHError` during reconciliation; falls back to cached data with a warning.
 
 ---
 
-### 3.8 `slurp cancel`
+### 4.8 `slurp cancel`
 
-**Syntax:**
+**Synopsis:**
 ```
 slurp cancel <job_id> [<job_id> ...]
-slurp cancel-all --experiment <experiment>
 ```
 
-**Purpose:** Cancel one or more SLURM jobs.
-
-**Flags:**
-- `--experiment E` — cancel all jobs tagged with experiment `E`
-- `--force` — skip confirmation prompt
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Cancellation succeeded (or job was already terminal) |
-| 6 | Permission denied (cannot cancel another user's job) |
-| 5 | Job ID not found |
-| 10 | SSH connection failed |
+**Description:** Cancel one or more jobs via `scancel`. Accepts multiple job IDs in a single invocation.
 
 **Examples:**
-
 ```bash
-# Cancel single job
 slurp cancel 12345
-
-# Cancel multiple jobs
 slurp cancel 12345 12346 12347
-
-# Cancel all jobs in an experiment
-slurp cancel-all --experiment exp_v1 --force
 ```
 
-**Error handling:**
-- Cancelling a job that is already `COMPLETED` or `FAILED` is a no-op (exit code 0).
-- Cancelling a job you do not own raises `SlurmError` with exit code 6.
+**Exit codes:**
+- `0` — All jobs cancelled (or already terminal).
+- `1` — `SlurmError` (e.g. job not found, permission denied).
+- `2` — `SSHError`.
+
+**Edge cases:**
+- **Already terminal job:** `scancel` returns non-zero for completed jobs. `slurp cancel` treats this as success and prints `Job 12345 is already COMPLETED.`
+- **Array job:** Cancelling the base job ID cancels all tasks. To cancel a single task, append the task ID: `slurp cancel 12345_3`.
 
 ---
 
-### 3.9 `slurp sync`
+### 4.9 `slurp sync`
 
-**Syntax:**
+**Synopsis:**
 ```
 slurp sync [OPTIONS]
 ```
 
-**Purpose:** Sync local code to the remote working directory without submitting a job.
+**Description:** Sync local code to the remote working directory without submitting a job. Useful for verifying that rsync works or for pre-staging code before a manual SSH session.
 
-**Flags:**
-- `--profile P` — target profile
-- `--dry-run` — show what would be synced without transferring
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Sync completed |
-| 3 | `rsync` failed |
-| 10 | SSH connection failed |
-
-**Example:**
-```bash
-# Verify sync before submitting
-slurp sync --dry-run
-slurp submit python train.py --gpus 4
-```
-
----
-
-### 3.10 `slurp pull`
-
-**Syntax:**
-```
-slurp pull <job_id> --local <path>
-```
-
-**Purpose:** Download results from a completed job's remote working directory to a local path.
-
-**Flags:**
-- `--local PATH` — destination directory (required)
-- `--include PATTERN` — rsync include filter (repeatable)
-- `--exclude PATTERN` — rsync exclude filter (repeatable)
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Pull completed |
-| 5 | Job ID not found |
-| 7 | Job not in terminal state (cannot pull from RUNNING job) |
-| 10 | SSH connection failed |
-
-**Example:**
-```bash
-slurp pull 12345 --local ./outputs/run-12345
-```
-
-**Error handling:**
-- Pulling from a `RUNNING` job raises a warning and exits with code 7. Use `--force` to override.
-- If the remote directory was deleted (e.g., scratch cleanup), exits with code 3 and prints the remote path.
-
----
-
-### 3.11 `slurp config`
-
-**Syntax:**
-```
-slurp config add-profile <name> [OPTIONS]
-slurp config list-profiles
-slurp config show-profile <name>
-slurp config remove-profile <name>
-```
-
-**Purpose:** Manage connection profiles stored in `~/.config/slurp/profiles.toml`.
-
-**Flags for `add-profile`:**
-- `--hostname HOST` — login node hostname
-- `--user USER` — SSH username
-- `--key-file PATH` — SSH private key
-- `--proxy-jump HOST` — jump host (optional)
-- `--partition P` — default SLURM partition
-- `--account A` — default SLURM account
-- `--default` — set as default profile
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| 0 | Profile operation succeeded |
-| 8 | Profile already exists (add) or not found (show/remove) |
-| 10 | SSH connection failed (when testing new profile) |
+**Options:**
+- `--profile NAME` — Target profile (global).
 
 **Examples:**
-
 ```bash
-# Add a new profile
-slurp config add-profile jureca \
-  --hostname jrlogin \
-  --user alice \
-  --key-file ~/.ssh/id_ed25519 \
-  --partition dc-gpu \
-  --account training2615 \
-  --default
-
-# List all profiles
-slurp config list-profiles
-
-# Inspect a profile
-slurp config show-profile jureca
-
-# Remove a profile
-slurp config remove-profile jureca
+slurp sync
+slurp sync --profile jureca
 ```
 
-**Error handling:**
-- Adding a profile with the same name prompts for overwrite confirmation unless `--force` is passed.
-- `add-profile` attempts an SSH connection to verify host reachability. If the connection fails, the profile is saved but a warning is printed.
+**Exit codes:**
+- `0` — Sync completed.
+- `3` — `SyncError` (rsync exited non-zero).
+- `2` — `SSHError`.
+
+**Edge cases:**
+- **No changes:** `rsync` exits `0` even if nothing changed. The command prints `Sync complete. 0 files transferred.`
+- **Large transfers:** For trees >1 GB, the command may take minutes. There is no progress bar in v0.1; the user sees a spinner.
 
 ---
 
-## 4. Global Flags
+### 4.10 `slurp pull`
 
-The following flags are valid for **all** commands:
+**Synopsis:**
+```
+slurp pull <job_id> [--local DIR]
+```
 
-| Flag | Effect |
-|------|--------|
-| `--profile P` | Use profile `P` instead of default |
-| `--verbose, -v` | Increase log verbosity (repeatable: `-vv`) |
-| `--quiet, -q` | Suppress non-error output |
-| `--json` | Output machine-readable JSON (where applicable) |
-| `--dry-run` | Show what would happen without executing |
-| `--help` | Show command-specific help |
+**Description:** Download job results (stdout, stderr, and any files in the job's remote working directory) to a local directory.
+
+**Options:**
+- `--local DIR` — Destination directory (default: `./outputs/<job_id>/`).
+
+**Examples:**
+```bash
+slurp pull 12345
+slurp pull 12345 --local ./results/
+```
+
+**Exit codes:**
+- `0` — Pull completed.
+- `1` — Job ID not found.
+- `3` — `SyncError` (rsync or `scp` failure).
+- `2` — `SSHError`.
+
+**Edge cases:**
+- **Job still running:** Pull proceeds, but files may be incomplete. A warning is printed: `Job 12345 is RUNNING. Output may be incomplete.`
+- **Missing results:** If the remote working directory is empty, the local directory is created but contains only `.out` and `.err` files.
+
+---
+
+### 4.11 `slurp config`
+
+**Synopsis:**
+```
+slurp config add-profile NAME [OPTIONS]
+slurp config list-profiles
+slurp config show-profile NAME
+slurp config edit-profile NAME
+```
+
+**Description:** Manage connection profiles stored in `~/.config/slurp/profiles.toml`.
+
+**Subcommands:**
+
+| Subcommand | Purpose |
+|------------|---------|
+| `add-profile` | Create a new profile interactively or non-interactively |
+| `list-profiles` | Print all profiles as a table |
+| `show-profile` | Print one profile as TOML |
+| `edit-profile` | Open `$EDITOR` on the profile file |
+
+**`add-profile` options:**
+- `--hostname HOST` — Login node hostname.
+- `--user USER` — SSH username.
+- `--key-file PATH` — SSH private key path.
+- `--proxy-jump HOST` — Jump host (optional).
+- `--partition P` — Default SLURM partition.
+- `--account A` — Default SLURM account.
+
+**Examples:**
+```bash
+# Interactive first-run setup
+slurp config add-profile jureca
+
+# Non-interactive (CI/automation)
+slurp config add-profile jureca --hostname jrlogin --user alice --partition dc-gpu --account training2615
+
+slurp config list-profiles
+slurp config show-profile jureca
+```
+
+**Exit codes:**
+- `0` — Operation completed.
+- `10` — Profile name already exists (add-profile with `--force` to overwrite).
+- `11` — `~/.config/slurp/` not writable.
+
+**Edge cases:**
+- **Missing `~/.ssh/config`:** `add-profile` prompts for hostname and user. If the user has an SSH config Host entry, the profile auto-populates from it.
+- **Key file not found:** A warning is printed but the profile is saved. The error will surface on the first SSH connection attempt.
 
 ---
 
 ## 5. Exit Code Summary
 
-| Code | Meaning | Commands |
-|------|---------|----------|
-| 0 | Success | All |
-| 1 | SLURM / job failure | `submit`, `run`, `submit-array` |
-| 2 | Argument parsing error | All |
-| 3 | Sync / rsync failure | `submit`, `run`, `sync` |
-| 4 | Invalid array parameters | `submit-array` |
-| 5 | Job ID not found | `logs`, `status`, `cancel`, `pull` |
-| 6 | Permission denied | `cancel` |
-| 7 | Job not terminal (pull) | `pull` |
-| 8 | Profile error | `config` |
-| 10 | SSH transport failure | All |
-| 124 | Timeout | `run` |
-| 130 | User interrupt (Ctrl+C) | All interactive commands |
-
----
-
-## 6. Idempotency & Duplicate Submission Guard
-
-`slurp submit` stores a hash of `(command + resources + working_dir)` in the local job store. If the user submits an identical spec within 30 seconds and the previous job is still `PENDING`, the CLI warns:
-
-```
-Warning: Job 12345 with identical spec submitted 5s ago. Submit again? [y/N]
-```
-
-If the user pressed Ctrl+C during a previous `sbatch` call (creating ambiguous state), `slurp` queries `sacct -S now-5minutes` to check whether the job actually landed before offering the duplicate guard.
-
-This guard is **client-side only** — there is no distributed token or remote state machine. It protects against the most common accidental duplicate: the impatient retry.
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | SLURM error (`SlurmError`, `JobFailedError`) |
+| `2` | SSH transport error (`SSHError`) |
+| `3` | Sync / file transfer error (`SyncError`) |
+| `4` | Idempotency duplicate rejected by user |
+| `5` | Invalid array sweep specification |
+| `10` | Profile missing or not writable |
+| `11` | Config directory not writable |
+| `124` | Local timeout (`slurp run` waited too long) |
+| `125` | Internal / unexpected error |
+| `126` | CLI argument parsing error (`typer.BadParameter`) |
+| `127` | Command not found (e.g. `rsync` not installed locally) |
