@@ -13,8 +13,8 @@ app = typer.Typer()
 
 @app.command(name="cancel", help="Cancel one or more jobs")
 def cancel_cmd(
-    job_ids: list[str] = typer.Argument(..., help="Job IDs to cancel"),
-    profile: str = typer.Option(None, "--profile"),
+    job_ids: list[str] = typer.Argument(..., help="Job IDs to cancel"),  # noqa: B008
+    profile: str = typer.Option(None, "--profile"),  # noqa: B008
 ) -> None:
     client = SyncClient(profile=profile)
     for job_id in job_ids:

@@ -69,16 +69,16 @@ async def sync_to_remote(
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         raise SyncError(
             "rsync timed out after 300s",
             hint="Your project may be very large. Consider using a .gitignore to exclude data.",
-        )
-    except FileNotFoundError:
+        ) from exc
+    except FileNotFoundError as exc:
         raise SyncError(
             "rsync not found in PATH",
             hint="Install rsync: sudo apt-get install rsync",
-        )
+        ) from exc
 
     if result.returncode != 0:
         raise SyncError(
@@ -121,5 +121,5 @@ async def snapshot_remote(
         raise SyncError(
             f"Snapshot failed: {exc}",
             hint="Check remote disk space and permissions.",
-        )
+        ) from exc
     return snapshot_dir

@@ -328,7 +328,7 @@ async def scancel(
         raise SlurmError(
             f"scancel failed: {exc}",
             hint="Check SSH connection and job ID.",
-        )
+        ) from exc
 
 
 def log_path(job_id: str, job_name: str, working_dir: str, task_id: int | None = None) -> tuple[str, str]:

@@ -7,9 +7,9 @@ import fcntl
 import json
 import os
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from slurp.domain import JobRecord, JobStatus, LogOffsetRecord
 from slurp.errors import ConfigError, SlurpError
@@ -37,7 +37,7 @@ class JobStore:
             raise SlurpError(
                 f"Failed to acquire store lock: {exc}",
                 hint="Another slurp process may be holding the job store. Wait and retry.",
-            )
+            ) from exc
         return fd
 
     def _release_lock(self, fd: int) -> None:
@@ -82,7 +82,7 @@ class JobStore:
             raise ConfigError(
                 f"Failed to write job store: {exc}",
                 hint="Check disk space and permissions for ~/.local/share/slurp/",
-            )
+            ) from exc
 
     def write_jobs(self, jobs: dict[str, JobRecord]) -> None:
         """Replace the entire jobs section."""
@@ -142,23 +142,27 @@ class JobStore:
     def check_idempotency(self, hash_key: str, window_seconds: float = 30.0) -> str | None:
         """Return job_id if a matching hash exists within the window."""
         data = self.read()
-        entry: dict[str, Any] | None = data.get("idempotency", {}).get(hash_key)
+        entry = cast(dict[str, Any] | None, data.get("idempotency", {}).get(hash_key))
         if entry is None:
             return None
+        from datetime import datetime
 
         submitted = datetime.fromisoformat(entry["submitted_at"])
         age = (datetime.now(UTC) - submitted).total_seconds()
         if age > window_seconds:
             return None
         # Also check if the job is still pending
-        job = data.get("jobs", {}).get(entry["job_id"])
+        job_id = cast(str | None, entry.get("job_id"))
+        if job_id is None:
+            return None
+        job = data.get("jobs", {}).get(job_id)
         if job and job.get("status") == "PENDING":
-            job_id: str | None = entry.get("job_id")
             return job_id
         return None
 
     def _prune_idempotency(self, data: dict[str, Any]) -> None:
         """Remove idempotency entries older than 30 seconds."""
+        from datetime import datetime
 
         now = datetime.now(UTC)
         stale = []
@@ -213,6 +217,7 @@ class LogOffsetStore:
 
     def set_offset(self, job_id: str, out: int, err: int) -> None:
         offsets = self.read()
+        from datetime import datetime
 
         offsets[job_id] = LogOffsetRecord(
             out=out, err=err, last_read=datetime.now(UTC)

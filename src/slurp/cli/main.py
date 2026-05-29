@@ -68,15 +68,15 @@ app.add_typer(config_app, name="config")
 # Aliases: slurp run = slurp submit --wait
 @app.command(name="run", help="Blocking submit with live log streaming")
 def run_cmd(
-    command: list[str] = typer.Argument(..., help="Command to run"),
-    profile: str = typer.Option(None, "--profile"),
-    gpus: int = typer.Option(0, "--gpus"),
-    nodes: int = typer.Option(1, "--nodes"),
-    time: str = typer.Option(None, "--time"),
-    partition: str = typer.Option(None, "--partition"),
-    account: str = typer.Option(None, "--account"),
-    experiment: str = typer.Option(None, "--experiment"),
-    verbose: int = typer.Option(0, "--verbose", "-v", count=True),
+    command: list[str] = typer.Argument(..., help="Command to run"),  # noqa: B008
+    profile: str = typer.Option(None, "--profile"),  # noqa: B008
+    gpus: int = typer.Option(0, "--gpus"),  # noqa: B008
+    nodes: int = typer.Option(1, "--nodes"),  # noqa: B008
+    time: str = typer.Option(None, "--time"),  # noqa: B008
+    partition: str = typer.Option(None, "--partition"),  # noqa: B008
+    account: str = typer.Option(None, "--account"),  # noqa: B008
+    experiment: str = typer.Option(None, "--experiment"),  # noqa: B008
+    verbose: int = typer.Option(0, "--verbose", "-v", count=True),  # noqa: B008
 ) -> None:
     from slurp.client import SyncClient
 
@@ -117,8 +117,9 @@ def _handle_error(exc: Exception, verbose: int) -> None:
         content = f"[bold red]{exc.message}[/bold red]"
         if exc.hint:
             content += f"\n\n[yellow]Hint: {exc.hint}[/yellow]"
-        if getattr(exc, "stderr_fragment", None):
-            content += f"\n\n[dim]stderr:[/dim]\n{exc.stderr_fragment}"
+        stderr_fragment = getattr(exc, "stderr_fragment", None)
+        if stderr_fragment:
+            content += f"\n\n[dim]stderr:[/dim]\n{stderr_fragment}"
         if exc.retryable:
             content += "\n\n[dim]This error may resolve if you retry.[/dim]"
         panel = Panel(content, title=title, border_style="red")

@@ -31,7 +31,7 @@ def _common_opts(
     experiment: str = typer.Option(None, "--experiment"),
     snapshot: bool = typer.Option(False, "--snapshot"),
     dry_run: bool = typer.Option(False, "--dry-run"),
-    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
+    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),  # noqa: B008
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "profile": profile,
@@ -60,24 +60,24 @@ def _common_opts(
 @app.command(name="submit", help="Fire-and-forget job submission")
 def submit_cmd(
     ctx: typer.Context,
-    command: list[str] = typer.Argument(..., help="Command to run"),
-    profile: str = typer.Option(None, "--profile"),
-    gpus: int = typer.Option(0, "--gpus"),
-    nodes: int = typer.Option(1, "--nodes"),
-    cpus: int = typer.Option(8, "--cpus"),
-    mem: str = typer.Option(None, "--mem"),
-    time: str = typer.Option(None, "--time"),
-    partition: str = typer.Option(None, "--partition"),
-    account: str = typer.Option(None, "--account"),
-    constraint: str = typer.Option(None, "--constraint"),
-    qos: str = typer.Option(None, "--qos"),
-    mail_type: str = typer.Option(None, "--mail-type"),
-    job_name: str = typer.Option(None, "--job-name"),
-    experiment: str = typer.Option(None, "--experiment"),
-    snapshot: bool = typer.Option(False, "--snapshot"),
-    dry_run: bool = typer.Option(False, "--dry-run"),
-    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
-    sync: bool = typer.Option(True, "--sync/--no-sync"),
+    command: list[str] = typer.Argument(..., help="Command to run"),  # noqa: B008
+    profile: str = typer.Option(None, "--profile"),  # noqa: B008
+    gpus: int = typer.Option(0, "--gpus"),  # noqa: B008
+    nodes: int = typer.Option(1, "--nodes"),  # noqa: B008
+    cpus: int = typer.Option(8, "--cpus"),  # noqa: B008
+    mem: str = typer.Option(None, "--mem"),  # noqa: B008
+    time: str = typer.Option(None, "--time"),  # noqa: B008
+    partition: str = typer.Option(None, "--partition"),  # noqa: B008
+    account: str = typer.Option(None, "--account"),  # noqa: B008
+    constraint: str = typer.Option(None, "--constraint"),  # noqa: B008
+    qos: str = typer.Option(None, "--qos"),  # noqa: B008
+    mail_type: str = typer.Option(None, "--mail-type"),  # noqa: B008
+    job_name: str = typer.Option(None, "--job-name"),  # noqa: B008
+    experiment: str = typer.Option(None, "--experiment"),  # noqa: B008
+    snapshot: bool = typer.Option(False, "--snapshot"),  # noqa: B008
+    dry_run: bool = typer.Option(False, "--dry-run"),  # noqa: B008
+    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),  # noqa: B008
+    sync: bool = typer.Option(True, "--sync/--no-sync"),  # noqa: B008
 ) -> None:
     cmd_str = " ".join(command)
     client = SyncClient(profile=profile)
@@ -141,9 +141,9 @@ def submit_array_cmd(
     time: str = typer.Option(None, "--time"),
     partition: str = typer.Option(None, "--partition"),
     account: str = typer.Option(None, "--account"),
-    experiment: str = typer.Option(None, "--experiment"),
-    throttle: int = typer.Option(20, "--throttle"),
-    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
+    experiment: str = typer.Option(None, "--experiment"),  # noqa: B008
+    throttle: int = typer.Option(20, "--throttle"),  # noqa: B008
+    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),  # noqa: B008
 ) -> None:
     # Parse template: if no {placeholders}, treat as a command with trailing options as sweep params
     # For simplicity, require explicit --key value1,value2,... flags

@@ -21,7 +21,7 @@ class SSHManager:
     """Manages persistent SSH connections per profile."""
 
     def __init__(self) -> None:
-        self._connections: dict[str, asyncssh.SSHClientConnection | None] = {}
+        self._connections: dict[str, asyncssh.SSHClientConnection] = {}
         self._lock = asyncio.Lock()
         SOCKET_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -64,7 +64,6 @@ class SSHManager:
 
         with contextlib.suppress(subprocess.TimeoutExpired):
             subprocess.run(cmd, capture_output=True, timeout=15)
-        # ssh -MNf may still succeed in background even after timeout
 
     async def _connect(self, profile: Profile) -> asyncssh.SSHClientConnection:
         """Create a new asyncssh connection, reading OpenSSH config."""
@@ -87,13 +86,13 @@ class SSHManager:
                 f"SSH connection to {profile.hostname} failed: {exc}",
                 hint="Check network, VPN, and SSH config. Verify the host is reachable.",
                 retryable=True,
-            )
+            ) from exc
         except OSError as exc:
             raise SSHError(
                 f"SSH connection to {profile.hostname} timed out: {exc}",
                 hint="Check network and try again.",
                 retryable=True,
-            )
+            ) from exc
 
     async def get_connection(self, profile: Profile) -> asyncssh.SSHClientConnection:
         """Return a live connection, reconnecting if necessary."""
@@ -119,8 +118,8 @@ class SSHManager:
         conn = await self.get_connection(profile)
         try:
             result = await conn.run(command, timeout=timeout, check=False)
-            stdout = result.stdout or "" if isinstance(result.stdout, str) else ""
-            stderr = result.stderr or "" if isinstance(result.stderr, str) else ""
+            stdout = str(result.stdout or "")
+            stderr = str(result.stderr or "")
             if check and result.exit_status != 0:
                 raise SSHError(
                     f"Remote command failed with exit code {result.exit_status}: {command}",
@@ -128,12 +127,12 @@ class SSHManager:
                     retryable=True,
                 )
             return result.exit_status or 0, stdout, stderr
-        except TimeoutError:
+        except TimeoutError as exc:
             raise SSHError(
                 f"SSH command timed out after {timeout}s: {command}",
                 hint="The remote host may be overloaded or unreachable.",
                 retryable=True,
-            )
+            ) from exc
 
     async def run_with_retry(
         self,
@@ -158,8 +157,9 @@ class SSHManager:
                 # Force reconnect
                 async with self._lock:
                     self._connections.pop(profile.name, None)
-        assert last_exc is not None
-        raise last_exc
+        if last_exc is None:
+            raise RuntimeError("Unexpected empty last_exc in run_with_retry")
+        raise last_exc  # pragma: no cover
 
     async def open_process(
         self,
@@ -167,12 +167,12 @@ class SSHManager:
         command: str,
         *,
         timeout: float | None = None,
-    ) -> asyncssh.SSHClientProcess[str]:
+    ) -> asyncssh.SSHClientProcess[Any]:
         """Open a remote process for streaming."""
         conn = await self.get_connection(profile)
         try:
             return await conn.create_process(command, timeout=timeout)
-        except Exception as exc:
+        except asyncssh.Error as exc:
             raise SSHError(
                 f"Failed to open remote process: {exc}",
                 retryable=True,
@@ -186,13 +186,11 @@ class SSHManager:
         """Close connection(s)."""
         if profile is None:
             for conn in self._connections.values():
-                if conn is not None:
-                    conn.close()
+                conn.close()
             self._connections.clear()
         else:
-            conn = self._connections.pop(profile.name, None)
-            if conn is not None:
-                conn.close()
+            conn = self._connections.pop(profile.name)
+            conn.close()
 
 
 # Global manager instance
