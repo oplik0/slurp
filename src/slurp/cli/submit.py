@@ -2,17 +2,84 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
+import questionary
 import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
 from slurp.client import SyncClient
+from slurp.errors import ProfileError
 
 console = Console()
 app = typer.Typer()
+
+CONFIG_DIR = Path.home() / ".config" / "slurp"
+CONFIG_FILE = CONFIG_DIR / "profiles.toml"
+
+
+def _ensure_config_dir() -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _interactive_create_profile() -> str:
+    """Prompt the user for basic profile info and write it to profiles.toml."""
+    _ensure_config_dir()
+    console.print("[yellow]No profile found. Let's create one quickly.[/yellow]")
+    name = str(questionary.text("Profile name (e.g., default):").ask())
+    hostname = str(questionary.text("Hostname (e.g., cluster.example.com):").ask())
+    user = str(questionary.text("Username:").ask())
+    partition = str(questionary.text("Default partition (optional):").ask() or "")
+    account = str(questionary.text("Default account (optional):").ask() or "")
+
+    lines = [
+        "",
+        f"[profiles.{name}]",
+        f'hostname = "{hostname}"',
+        f'username = "{user}"',
+    ]
+    if partition:
+        lines.append(f'partition = "{partition}"')
+    if account:
+        lines.append(f'account = "{account}"')
+
+    with open(CONFIG_FILE, "a") as f:
+        f.write("\n".join(lines) + "\n")
+    console.print(f"[green]Profile '{name}' saved to {CONFIG_FILE}[/green]")
+    return name
+
+
+def _parse_sweep_params(raw_args: list[str]) -> dict[str, list[str]]:
+    """Parse trailing flags like --seed 1,2,3 into a mapping."""
+    params: dict[str, list[str]] = {}
+    i = 0
+    while i < len(raw_args):
+        arg = raw_args[i]
+        if arg.startswith("--") and i + 1 < len(raw_args):
+            key = arg.lstrip("-")
+            value = raw_args[i + 1]
+            params[key] = [v.strip() for v in value.split(",")]
+            i += 2
+        else:
+            i += 1
+    return params
+
+
+def _build_configs(params: dict[str, list[str]]) -> list[dict[str, str]]:
+    """Build config dicts from sweep params. Uses the longest list length; shorter lists repeat their last value."""
+    if not params:
+        return []
+    max_len = max(len(v) for v in params.values())
+    configs: list[dict[str, str]] = []
+    for i in range(max_len):
+        cfg: dict[str, str] = {}
+        for key, values in params.items():
+            cfg[key] = values[min(i, len(values) - 1)]
+        configs.append(cfg)
+    return configs
 
 
 def _common_opts(
@@ -31,9 +98,10 @@ def _common_opts(
     experiment: str = typer.Option(None, "--experiment"),
     snapshot: bool = typer.Option(False, "--snapshot"),
     dry_run: bool = typer.Option(False, "--dry-run"),
-    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),  # noqa: B008
+    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
 ) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
+    slurm_kwargs_dict: dict[str, str] = {}
+    kwargs = {
         "profile": profile,
         "gpus": gpus,
         "nodes": nodes,
@@ -48,39 +116,47 @@ def _common_opts(
         "name": job_name,
         "experiment": experiment,
         "snapshot": snapshot,
-        "slurm_kwargs": {},
+        "slurm_kwargs": slurm_kwargs_dict,
     }
     for kw in slurm_kwargs:
         if "=" in kw:
             k, v = kw.split("=", 1)
-            kwargs["slurm_kwargs"][k] = v
+            slurm_kwargs_dict[k] = v
     return kwargs
 
 
 @app.command(name="submit", help="Fire-and-forget job submission")
 def submit_cmd(
     ctx: typer.Context,
-    command: list[str] = typer.Argument(..., help="Command to run"),  # noqa: B008
-    profile: str = typer.Option(None, "--profile"),  # noqa: B008
-    gpus: int = typer.Option(0, "--gpus"),  # noqa: B008
-    nodes: int = typer.Option(1, "--nodes"),  # noqa: B008
-    cpus: int = typer.Option(8, "--cpus"),  # noqa: B008
-    mem: str = typer.Option(None, "--mem"),  # noqa: B008
-    time: str = typer.Option(None, "--time"),  # noqa: B008
-    partition: str = typer.Option(None, "--partition"),  # noqa: B008
-    account: str = typer.Option(None, "--account"),  # noqa: B008
-    constraint: str = typer.Option(None, "--constraint"),  # noqa: B008
-    qos: str = typer.Option(None, "--qos"),  # noqa: B008
-    mail_type: str = typer.Option(None, "--mail-type"),  # noqa: B008
-    job_name: str = typer.Option(None, "--job-name"),  # noqa: B008
-    experiment: str = typer.Option(None, "--experiment"),  # noqa: B008
-    snapshot: bool = typer.Option(False, "--snapshot"),  # noqa: B008
-    dry_run: bool = typer.Option(False, "--dry-run"),  # noqa: B008
-    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),  # noqa: B008
-    sync: bool = typer.Option(True, "--sync/--no-sync"),  # noqa: B008
+    command: list[str] = typer.Argument(..., help="Command to run"),
+    profile: str = typer.Option(None, "--profile"),
+    gpus: int = typer.Option(0, "--gpus"),
+    nodes: int = typer.Option(1, "--nodes"),
+    cpus: int = typer.Option(8, "--cpus"),
+    mem: str = typer.Option(None, "--mem"),
+    time: str = typer.Option(None, "--time"),
+    partition: str = typer.Option(None, "--partition"),
+    account: str = typer.Option(None, "--account"),
+    constraint: str = typer.Option(None, "--constraint"),
+    qos: str = typer.Option(None, "--qos"),
+    mail_type: str = typer.Option(None, "--mail-type"),
+    job_name: str = typer.Option(None, "--job-name"),
+    experiment: str = typer.Option(None, "--experiment"),
+    snapshot: bool = typer.Option(False, "--snapshot"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
+    sync: bool = typer.Option(True, "--sync/--no-sync"),
 ) -> None:
     cmd_str = " ".join(command)
-    client = SyncClient(profile=profile)
+    try:
+        client = SyncClient(profile=profile)
+    except ProfileError:
+        if sys.stdin.isatty():
+            profile = _interactive_create_profile()
+            client = SyncClient(profile=profile)
+        else:
+            raise
+
     kwargs: dict[str, Any] = {
         "gpus": gpus,
         "nodes": nodes,
@@ -101,7 +177,8 @@ def submit_cmd(
     for kw in slurm_kwargs:
         if "=" in kw:
             k, v = kw.split("=", 1)
-            kwargs["slurm_kwargs"][k] = v
+            slurm_kwargs_dict: dict[str, str] = kwargs["slurm_kwargs"]
+            slurm_kwargs_dict[k] = v
 
     if dry_run:
         from slurp.core.slurm import generate_sbatch_script
@@ -131,7 +208,11 @@ def submit_cmd(
     console.print(f"Job {job.job_id} submitted.")
 
 
-@app.command(name="submit-array", help="Submit a SLURM job array")
+@app.command(
+    name="submit-array",
+    help="Submit a SLURM job array",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
 def submit_array_cmd(
     ctx: typer.Context,
     template: str = typer.Argument(..., help="Command template or command"),
@@ -141,12 +222,46 @@ def submit_array_cmd(
     time: str = typer.Option(None, "--time"),
     partition: str = typer.Option(None, "--partition"),
     account: str = typer.Option(None, "--account"),
-    experiment: str = typer.Option(None, "--experiment"),  # noqa: B008
-    throttle: int = typer.Option(20, "--throttle"),  # noqa: B008
-    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),  # noqa: B008
+    experiment: str = typer.Option(None, "--experiment"),
+    throttle: int = typer.Option(20, "--throttle"),
+    slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
 ) -> None:
-    # Parse template: if no {placeholders}, treat as a command with trailing options as sweep params
-    # For simplicity, require explicit --key value1,value2,... flags
-    console.print("Array submission requires explicit configs via Python API for now.")
-    console.print("Example: slurp.submit_array('python train.py --seed {seed}', configs=[...])")
-    raise typer.Exit(1)
+    # Parse trailing flags as sweep parameters, e.g. --seed 1,2,3
+    raw_args = ctx.args
+    sweep_params = _parse_sweep_params(raw_args)
+    configs = _build_configs(sweep_params)
+
+    if not configs:
+        console.print("[red]No sweep parameters provided.[/red]")
+        console.print("Usage: slurp submit-array 'python train.py --seed {seed}' --seed 1,2,3")
+        raise typer.Exit(1)
+
+    try:
+        client = SyncClient(profile=profile)
+    except ProfileError:
+        if sys.stdin.isatty():
+            profile = _interactive_create_profile()
+            client = SyncClient(profile=profile)
+        else:
+            raise
+
+    kwargs: dict[str, Any] = {
+        "gpus": gpus,
+        "nodes": nodes,
+        "time": time,
+        "partition": partition,
+        "account": account,
+        "experiment": experiment,
+    }
+    for kw in slurm_kwargs:
+        if "=" in kw:
+            k, v = kw.split("=", 1)
+            kwargs.setdefault("slurm_kwargs", {})[k] = v
+
+    array = client.submit_array(
+        template,
+        configs=configs,
+        throttle=throttle,
+        **kwargs,
+    )
+    console.print(f"Array job {array.array_job_id} submitted ({array.task_count} tasks).")

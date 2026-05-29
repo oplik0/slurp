@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import fcntl
 import json
 import os
 import tempfile
 from datetime import UTC
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from slurp.domain import JobRecord, JobStatus, LogOffsetRecord
 from slurp.errors import ConfigError, SlurpError
@@ -37,7 +36,7 @@ class JobStore:
             raise SlurpError(
                 f"Failed to acquire store lock: {exc}",
                 hint="Another slurp process may be holding the job store. Wait and retry.",
-            ) from exc
+            )
         return fd
 
     def _release_lock(self, fd: int) -> None:
@@ -66,8 +65,10 @@ class JobStore:
         """Write data atomically using temp file + rename."""
         # Clean up stale temp files
         for tmp in self.path.parent.glob("*.tmp.*"):
-            with contextlib.suppress(OSError):
+            try:
                 tmp.unlink()
+            except OSError:
+                pass
 
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=self.path.parent, prefix="jobs.json.tmp.", suffix=f".{os.getpid()}"
@@ -82,7 +83,7 @@ class JobStore:
             raise ConfigError(
                 f"Failed to write job store: {exc}",
                 hint="Check disk space and permissions for ~/.local/share/slurp/",
-            ) from exc
+            )
 
     def write_jobs(self, jobs: dict[str, JobRecord]) -> None:
         """Replace the entire jobs section."""
@@ -142,7 +143,7 @@ class JobStore:
     def check_idempotency(self, hash_key: str, window_seconds: float = 30.0) -> str | None:
         """Return job_id if a matching hash exists within the window."""
         data = self.read()
-        entry = cast(dict[str, Any] | None, data.get("idempotency", {}).get(hash_key))
+        entry: dict[str, Any] | None = data.get("idempotency", {}).get(hash_key)
         if entry is None:
             return None
         from datetime import datetime
@@ -152,11 +153,9 @@ class JobStore:
         if age > window_seconds:
             return None
         # Also check if the job is still pending
-        job_id = cast(str | None, entry.get("job_id"))
-        if job_id is None:
-            return None
-        job = data.get("jobs", {}).get(job_id)
+        job = data.get("jobs", {}).get(entry["job_id"])
         if job and job.get("status") == "PENDING":
+            job_id: str | None = entry.get("job_id")
             return job_id
         return None
 

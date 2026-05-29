@@ -125,7 +125,7 @@ def generate_array_wrapper(
         raise ValueError("configs must not be empty")
 
     # Collect unique keys and build shell arrays
-    keys = sorted({k for cfg in configs for k in cfg})
+    keys = sorted({k for cfg in configs for k in cfg.keys()})
     arrays: list[str] = []
     for key in keys:
         values = [cfg.get(key, "") for cfg in configs]
@@ -328,7 +328,7 @@ async def scancel(
         raise SlurmError(
             f"scancel failed: {exc}",
             hint="Check SSH connection and job ID.",
-        ) from exc
+        )
 
 
 def log_path(job_id: str, job_name: str, working_dir: str, task_id: int | None = None) -> tuple[str, str]:

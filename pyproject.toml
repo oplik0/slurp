@@ -87,7 +87,7 @@ select = [
     "C4",  # flake8-comprehensions
     "SIM", # flake8-simplify
 ]
-ignore = ["E501", "B008", "B904"]
+ignore = ["E501", "B008", "B904", "SIM105", "SIM118"]
 
 [tool.mypy]
 python_version = "3.11"

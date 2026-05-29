@@ -1,180 +1,231 @@
 # slurp
 
-> A Python library and CLI for running ML jobs on SLURM clusters.
-> **Simpler than `sbatch` for people who don't know `sbatch`.**
+[![CI](https://github.com/slurp/slurp/actions/workflows/test.yml/badge.svg)](https://github.com/slurp/slurp/actions/workflows/test.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
+> **A Python library and CLI for running ML jobs on SLURM clusters.**
+
+`slurp` makes it frictionless to submit, monitor, and manage ML experiments on SLURM. It treats your local workstation as the control plane: you write code locally, run `slurp submit`, and your code is synced to the cluster, scheduled, and tracked. When the job finishes, pull results back with a single command.
 
 ## Philosophy
 
-`slurp` is designed for researchers who understand PyTorch but do not want to learn SLURM internals, SBATCH directives, or multi-node launcher incantations. It provides a zero-config first run, interactive profile learning, and a tiny CLI surface that covers 80% of daily cluster workflows.
+- **Local-first**: Keep your editor, debugging, and git workflow on your laptop. The cluster is just compute.
+- **Zero-config first run**: `slurp submit` works even without a pre-written profile — it interactively asks for the connection details.
+- **Idempotency**: Accidentally run the same command twice? `slurp` warns you instead of launching a duplicate job.
+- **Pythonic API**: Use the CLI for quick experiments, or embed the Python API into your training pipelines for programmatic control.
+- **Batteries included**: Multi-node PyTorch Distributed, job arrays, live log streaming, and snapshot isolation out of the box.
 
 ## Installation
 
+Requires Python **3.11+**.
+
 ```bash
-# Using uv (recommended)
-uv pip install slurp
+# With uv (recommended)
+uv tool install slurp
 
-# Using pip
+# Or add to a project
+uv add slurp
+
+# Or with pip
 pip install slurp
+```
 
-# With web UI extras
-pip install slurp[web]
+For development, clone the repository and install in editable mode:
+
+```bash
+git clone https://github.com/slurp/slurp.git
+cd slurp
+uv sync --extra dev
 ```
 
 ## Quick Start
 
-### 1. Configure your cluster profile
+### 1. Configure a profile
 
 ```bash
-# Interactive first-run setup
-slurp config add-profile jureca
-# ? Hostname: jrlogin
-# ? Username: alice
-# ? Default partition: dc-gpu
-# ? Default account: training2615
-# ? Save profile? [Y/n]: Y
+slurp config add-profile my-cluster \
+  --hostname gpu-cluster.university.edu \
+  --user $USER \
+  --partition gpu \
+  --account my-lab
 ```
 
-Profiles are stored in `~/.config/slurp/profiles.toml`.
+Or let `slurp` ask you interactively:
+
+```bash
+slurp config add-profile my-cluster
+```
 
 ### 2. Submit a job
 
 ```bash
-# Fire-and-forget
-slurp submit python train.py --lr 0.01 --gpus 4 --time 2:00:00
-
-# Blocking run with live log streaming
-slurp run python train.py --lr 0.01 --gpus 4
-
-# Dry-run to preview the SBATCH script
-slurp submit --dry-run python train.py --gpus 4
+slurp submit python train.py --lr 0.001 --epochs 100
 ```
 
-### 3. Monitor jobs
+`slurp` will:
+1. Sync your local directory to the cluster.
+2. Generate an `sbatch` script.
+3. Submit the job.
+4. Store the job ID locally so you can track it later.
+
+### 3. Watch and pull
 
 ```bash
-# Live watch table
-slurp watch
-
-# Job logs
-slurp logs 12345
-slurp logs 12345 --follow
-
-# Status and listing
-slurp status 12345
-slurp list --experiment exp_v1
+slurp watch                        # Live dashboard of all jobs
+slurp logs 12345 --follow          # Tail logs
+slurp pull 12345                   # Download outputs to ./outputs/12345/
 ```
 
-### 4. Manage jobs
+## CLI Reference
 
-```bash
-# Cancel jobs
-slurp cancel 12345
+| Command | Description |
+|---------|-------------|
+| `slurp submit <command>` | Fire-and-forget job submission |
+| `slurp run <command>` | Blocking submit with live log streaming |
+| `slurp submit-array <template> --key v1,v2,...` | Submit a SLURM job array |
+| `slurp status <job_id>` | Show current job status |
+| `slurp list` | List tracked jobs |
+| `slurp watch` | Live table of jobs |
+| `slurp logs <job_id>` | Show stdout/stderr |
+| `slurp cancel <job_id>` | Cancel a job |
+| `slurp sync` | Sync code to remote without submitting |
+| `slurp pull <job_id>` | Download results from remote |
+| `slurp config add-profile <name>` | Add a cluster profile |
+| `slurp config list-profiles` | Show configured profiles |
+| `slurp config show-profile <name>` | Show a single profile |
+| `slurp config edit-profile` | Open `profiles.toml` in `$EDITOR` |
 
-# Sync code without submitting
-slurp sync
+### Common flags
 
-# Pull results
-slurp pull 12345 --local ./outputs
-```
+- `--profile <name>` — Use a specific cluster profile.
+- `--gpus <n>` — Request GPUs.
+- `--nodes <n>` — Request multiple nodes (auto-inserts `torchrun`).
+- `--time <HH:MM:SS>` — Wall-clock limit.
+- `--partition <name>` — SLURM partition.
+- `--account <name>` — SLURM account.
+- `--experiment <tag>` — Tag the job for filtering.
+- `--snapshot` — Snapshot the remote working directory before the job runs.
+- `--dry-run` — Print the generated `sbatch` script without submitting.
+- `--slurm-kwargs key=value` — Pass arbitrary `#SBATCH` directives.
 
-## Python API
+## Python API Example
 
 ```python
-import slurp
+from slurp import SyncClient
 
-# Fire-and-forget
-job = slurp.submit("python train.py --lr 0.01", gpus=4, time="2:00:00")
-print(job.job_id)  # 12345
+client = SyncClient(profile="my-cluster")
 
-# Block until completion
-result = job.wait(follow_logs=True)
-print(result.exit_code, result.stdout)
-
-# Job arrays
-array = slurp.submit_array(
-    "python train.py --seed {seed}",
-    configs=[{"seed": str(i)} for i in range(5)],
-    gpus=4,
+# Submit a single job
+job = client.submit(
+    "python train.py --lr 0.001",
+    gpus=2,
+    time="4:00:00",
+    partition="gpu",
+    experiment="transformer-v2",
 )
 
-# Experiment grouping
-exp = slurp.Experiment("exp_v1")
-job = exp.submit("python train.py", gpus=4)
-exp.watch()
+# Wait for completion with live logs
+result = job.wait(follow_logs=True)
+print(result.stdout)
+
+# Submit a hyper-parameter sweep as a job array
+array = client.submit_array(
+    "python train.py --seed {seed}",
+    configs=[{"seed": str(s)} for s in range(5)],
+    gpus=1,
+    time="2:00:00",
+)
+
+# Wait for all tasks
+results = array.results()
 ```
 
 ## Profile Configuration
 
-Example `~/.config/slurp/profiles.toml`:
+Profiles are stored in `~/.config/slurp/profiles.toml`:
 
 ```toml
-[profiles.jureca]
-hostname = "jrlogin"
+[profiles.default]
+hostname = "gpu-cluster.university.edu"
 username = "alice"
+partition = "gpu"
+account = "lab-123"
 key_file = "~/.ssh/id_ed25519"
+
+[profiles.default.sync]
+local = "."
+remote = "/home/alice/projects/my-project"
+
+[profiles.jureca]
+hostname = "jureca.fz-juelich.de"
+username = "alice"
 partition = "dc-gpu"
-account = "training2615"
-
-prologue = """
-jutil env activate -p {account}
-module load Stages/2024
-module load CUDA/12
-module load PyTorch
-source $PROJECT/.venv/bin/activate
-"""
-
+account = "my-project"
+prologue = "module load Python\nmodule load CUDA"
 mpi_mode = "pmi2"
-cpu_bind = "cores"
-
-[profiles.jureca.sync]
-local = "/home/alice/projects"
-remote = "/p/project1/training2615/alice/projects"
+gpu_flag_style = "gres"
 ```
 
-## Development
+### Profile fields
+
+| Field | Description |
+|-------|-------------|
+| `hostname` | SSH target host |
+| `username` | SSH username |
+| `key_file` | SSH private key path |
+| `proxy_jump` | Bastion host for multi-hop SSH |
+| `partition` | Default SLURM partition |
+| `account` | Default SLURM account |
+| `prologue` | Shell commands injected before the user command |
+| `mpi_mode` | MPI mode for multi-node (`pmi2`, `pmix`, etc.) |
+| `cpu_bind` | CPU binding strategy (`cores`, `threads`, etc.) |
+| `gpu_flag_style` | `gres` or `gpus` depending on cluster SLURM version |
+| `sync.local` | Local path to sync from |
+| `sync.remote` | Remote path to sync to |
+
+## Development Setup
 
 ```bash
-# Clone and setup
-uv sync
+# Clone and enter the repo
+git clone https://github.com/slurp/slurp.git
+cd slurp
 
-# Run tests
-uv run pytest tests/unit/ -v
+# Install dependencies with uv
+uv sync --extra dev
 
-# Lint and type check
-uv run ruff check src/slurp/
-uv run mypy src/slurp/
+# Run the test suite
+uv run pytest
 
-# Install pre-commit hooks
-uv run pre-commit install
+# Run linting
+uv run ruff check src tests
+uv run mypy src
+
+# Run pre-commit hooks
+uv run pre-commit run --all-files
 ```
 
-## Architecture
+### Project Structure
 
 ```
-src/slurp/
-├── __init__.py          # Public API
-├── domain.py            # Pydantic models (Job, Profile, ResourceRequest)
-├── client.py            # SyncClient (public API)
-├── core/
-│   ├── ssh.py           # asyncssh transport with auto-reconnect
-│   ├── slurm.py         # SBATCH generation and SLURM wrappers
-│   ├── sync.py          # rsync code sync
-│   ├── launcher.py      # TorchrunLauncher for multi-node
-│   └── store.py         # Atomic JSON job store
-├── cli/
-│   ├── main.py          # Typer entry point
-│   ├── submit.py        # submit, run, submit-array
-│   ├── watch.py         # Live watch table
-│   ├── logs.py          # Log streaming
-│   ├── status.py        # Status and list
-│   ├── cancel.py        # Cancel jobs
-│   ├── sync.py          # Sync code
-│   ├── pull.py          # Pull results
-│   └── config.py        # Profile management
-└── helpers/
-    └── debug.py         # debugpy helper
+slurp/
+├── src/slurp/
+│   ├── cli/          # Typer CLI commands
+│   ├── core/         # SSH, SLURM, sync, store
+│   ├── domain.py     # Pydantic models
+│   ├── client.py     # SyncClient public API
+│   └── errors.py     # Exception hierarchy
+├── tests/
+│   ├── unit/         # Fast, isolated tests
+│   ├── integration/  # Tests with Dockerized SLURM
+│   └── e2e/          # Tests against real clusters
+├── docs/             # Design documents and RFCs
+└── templates/        # Example cluster profiles
 ```
+
+## Contributing
+
+Contributions are welcome! Please open an issue or pull request. Make sure to run `ruff` and `pytest` before submitting.
 
 ## License
 
-MIT
+MIT License — see [LICENSE](LICENSE) for details.

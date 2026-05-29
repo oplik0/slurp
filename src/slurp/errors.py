@@ -12,11 +12,13 @@ class SlurpError(Exception):
         *,
         hint: str | None = None,
         retryable: bool = False,
+        stderr_fragment: str | None = None,
     ):
         super().__init__(message)
         self.message = message
         self.hint = hint
         self.retryable = retryable
+        self.stderr_fragment = stderr_fragment
 
     def __str__(self) -> str:
         parts = [self.message]

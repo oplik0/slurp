@@ -1,0 +1,20 @@
+[profiles.jureca]
+hostname = "jureca.fz-juelich.de"
+username = ""  # fill in your Jülich account
+partition = "dc-gpu"
+account = ""   # fill in your Jülich project
+key_file = "~/.ssh/id_ed25519"
+prologue = """
+module load Stages/2024
+module load GCC
+module load CUDA
+module load Python
+module load PyTorch
+"""
+mpi_mode = "pmi2"
+cpu_bind = "cores"
+gpu_flag_style = "gres"
+
+[profiles.jureca.sync]
+local = "."
+remote = "/p/project/$account/$username/slurp-projects"

@@ -279,7 +279,7 @@ class SyncClient:
         resources = ResourceRequest(
             gpus=kwargs.pop("gpus", 0),
             nodes=kwargs.pop("nodes", 1),
-            time=kwargs.pop("time", "2:00:00"),
+            time=kwargs.pop("time", None) or "2:00:00",
             partition=kwargs.get("partition") or profile.partition,
             account=kwargs.get("account") or profile.account,
         )
