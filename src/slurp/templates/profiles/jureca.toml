@@ -1,0 +1,25 @@
+# JURECA profile template
+# Usage: slurp config add-profile jureca --hostname jrlogin --user $USER --partition dc-gpu --account <account>
+
+[profiles.jureca]
+hostname = "jrlogin"
+username = ""
+partition = "dc-gpu"
+account = ""
+
+prologue = """
+jutil env activate -p {account}
+module load Stages/2024
+module load CUDA/12
+module load PyTorch
+source $PROJECT/.venv/bin/activate
+export NCCL_IB_HCA=mlx5_0,mlx5_1
+"""
+
+mpi_mode = "pmi2"
+cpu_bind = "cores"
+gpu_flag_style = "gres"
+
+[profiles.jureca.sync]
+local = ""
+remote = ""
