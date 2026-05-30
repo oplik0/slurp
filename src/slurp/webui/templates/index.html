@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>slurp — SLURM Dashboard</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <meta name="stream-token" content="{{ token }}">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-left">
+            <h1>slurp dashboard</h1>
+            <a href="https://github.com/slurp/slurp#cli" target="_blank" rel="noopener" class="docs-link">CLI docs</a>
+        </div>
+        <div class="header-right">
+            <select id="profile-selector" class="header-control" title="Profile">
+                <option value="">All profiles</option>
+            </select>
+            <input type="text" id="experiment-filter" class="header-control" placeholder="Filter experiment…" autocomplete="off">
+            <button id="refresh-btn" class="btn btn-ghost" title="Refresh">Refresh</button>
+            <button id="sync-btn" class="btn btn-primary" title="Sync code">Sync</button>
+        </div>
+    </header>
+
+    <main class="app-layout">
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h2>Filters</h2>
+                <button id="sidebar-close" class="btn btn-ghost btn-icon" aria-label="Close filters">×</button>
+            </div>
+            <div class="filter-group">
+                <label for="status-filter">Status</label>
+                <select id="status-filter" class="header-control">
+                    <option value="">All statuses</option>
+                    <option value="PENDING">Pending</option>
+                    <option value="RUNNING">Running</option>
+                    <option value="COMPLETED">Completed</option>
+                    <option value="FAILED">Failed</option>
+                    <option value="CANCELLED">Cancelled</option>
+                    <option value="TIMEOUT">Timeout</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="partition-filter">Partition</label>
+                <input type="text" id="partition-filter" class="header-control" placeholder="Any partition" autocomplete="off">
+            </div>
+        </aside>
+
+        <section class="main-content">
+            <div class="toolbar">
+                <button id="sidebar-toggle" class="btn btn-ghost btn-icon" aria-label="Toggle filters">☰</button>
+                <span id="job-count" class="job-count">0 jobs</span>
+            </div>
+            <div class="table-wrap">
+                <table id="jobs-table" class="jobs-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Partition</th>
+                            <th>Nodes</th>
+                            <th>GPUs</th>
+                            <th>Time</th>
+                            <th>Progress</th>
+                            <th>ETA</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jobs-tbody">
+                        <tr class="empty-row">
+                            <td colspan="9">Loading jobs…</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <aside id="detail-panel" class="detail-panel">
+            <div class="detail-header">
+                <h2>Job Details</h2>
+                <button id="detail-close" class="btn btn-ghost btn-icon" aria-label="Close details">×</button>
+            </div>
+            <div id="detail-content" class="detail-content">
+                <p class="detail-placeholder">Select a job to view details.</p>
+            </div>
+        </aside>
+    </main>
+
+    <div id="log-panel" class="log-panel">
+        <div class="log-header">
+            <span id="log-title" class="log-title">Logs</span>
+            <div class="log-actions">
+                <button id="log-toggle" class="btn btn-ghost btn-icon" aria-label="Toggle logs">⇅</button>
+                <button id="log-close" class="btn btn-ghost btn-icon" aria-label="Close logs">×</button>
+            </div>
+        </div>
+        <pre id="log-output" class="log-output"></pre>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>
