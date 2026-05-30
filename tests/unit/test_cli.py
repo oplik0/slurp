@@ -299,6 +299,24 @@ class TestConfig:
         assert "other" in result.output
 
 
+class TestWebui:
+    @patch("uvicorn.run")
+    @patch("slurp.webui.create_app")
+    @patch("slurp.webui.security.STREAM_TOKEN", "test-token")
+    def test_webui_basic(self, mock_create_app: MagicMock, mock_uvicorn_run: MagicMock) -> None:
+        result = runner.invoke(app, ["webui"])
+        assert result.exit_code == 0
+        assert "test-token" in result.output
+        mock_create_app.assert_called_once()
+        mock_uvicorn_run.assert_called_once()
+
+    def test_webui_missing_deps(self) -> None:
+        with patch.dict("sys.modules", {"uvicorn": None}):
+            result = runner.invoke(app, ["webui"])
+            assert result.exit_code == 1
+            assert "not installed" in result.output
+
+
 class TestErrorHandling:
     def test_slurm_error_exit_code(self, mock_client: MagicMock) -> None:
         from slurp.errors import SlurmError

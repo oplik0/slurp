@@ -69,7 +69,10 @@ async def index(request: Request, token: str | None = Query(None)) -> Any:
 
 
 @router.get("/stream")
-async def stream(token: str | None = Query(None)) -> StreamingResponse:
+async def stream(
+    token: str | None = Query(None),
+    max_events: int | None = Query(None),
+) -> StreamingResponse:
     """SSE endpoint for live job updates and log streaming."""
     _require_token(token)
 
@@ -78,11 +81,17 @@ async def stream(token: str | None = Query(None)) -> StreamingResponse:
 
     async def _event_generator() -> AsyncIterator[str]:
         try:
+            count = 0
             async for event in job_stream.events():
                 yield event
+                count += 1
+                if max_events is not None and count >= max_events:
+                    break
         except asyncio.CancelledError:
             job_stream.close()
             raise
+        finally:
+            job_stream.close()
 
     return StreamingResponse(
         _event_generator(),

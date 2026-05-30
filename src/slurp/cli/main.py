@@ -28,6 +28,7 @@ from .status import list_cmd, status_cmd
 from .submit import submit_array_cmd, submit_cmd
 from .sync import sync_cmd
 from .watch import watch_cmd
+from .webui import webui_cmd
 
 console = Console()
 app = typer.Typer(
@@ -65,6 +66,7 @@ app.command("list")(list_cmd)
 app.command("watch")(watch_cmd)
 app.command("sync")(sync_cmd)
 app.command("pull")(pull_cmd)
+app.command("webui")(webui_cmd)
 app.add_typer(config_app, name="config")
 
 

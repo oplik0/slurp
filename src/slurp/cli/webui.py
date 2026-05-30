@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import sys
-from typing import Any
 
 import typer
 from rich.console import Console
-
-from slurp.errors import ProfileError, SlurpError
 
 console = Console()
 
@@ -27,7 +24,7 @@ def webui_cmd(
     try:
         import uvicorn  # noqa: F401
         from fastapi import FastAPI  # noqa: F401
-    except ImportError as exc:
+    except ImportError:
         console.print(
             "[bold red]Error:[/bold red] Web UI dependencies not installed.\n"
             "Run: [bold]pip install slurp[web][/bold]"
@@ -72,3 +69,4 @@ def webui_cmd(
     except Exception as exc:
         console.print(f"[bold red]Error:[/bold red] Server failed: {exc}")
         sys.exit(1)
+
