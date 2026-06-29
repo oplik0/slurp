@@ -35,6 +35,9 @@ class _MockSSHManager:
     def control_master_socket(self, profile: Any) -> Path:
         return Path("/tmp/fake.sock")
 
+    def close(self, profile: Any | None = None) -> None:
+        pass
+
 
 @pytest.fixture
 def mock_profiles_toml(tmp_path: Path) -> Generator[Path, None, None]:

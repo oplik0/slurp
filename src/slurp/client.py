@@ -24,7 +24,7 @@ from slurp.core.slurm import (
 )
 from slurp.core.ssh import SSHManager
 from slurp.core.store import JobStore, LogOffsetStore
-from slurp.core.sync import snapshot_remote, sync_to_remote
+from slurp.core.sync import rsync_from_remote, snapshot_remote, sync_to_remote
 from slurp.domain import (
     ArrayJob,
     Job,
@@ -39,6 +39,7 @@ from slurp.errors import (
     JobFailedError,
     ProfileError,
     SlurmError,
+    SyncError,
 )
 
 logger = structlog.get_logger()
@@ -125,6 +126,16 @@ class SyncClient:
         self._store = JobStore()
         self._offset_store = LogOffsetStore()
 
+    def __enter__(self) -> SyncClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the SSH connection for this profile."""
+        self._ssh.close(profile=self.profile)
+
     def _run(self, coro: Any) -> Any:
         """Run an async coroutine from sync code, handling Jupyter loops."""
         try:
@@ -199,11 +210,6 @@ class SyncClient:
         if sync:
             self._run(sync_to_remote(profile, local_dir, remote_dir, ssh_manager=self._ssh))
 
-        # Snapshot
-        if snapshot:
-            # Snapshot is done on the remote side after sync
-            pass
-
         # Build command
         job_name = resources.job_name or slugify_command(command)
         if nodes > 1:
@@ -229,7 +235,8 @@ class SyncClient:
             sbatch_submit(profile, script, working_dir=remote_dir, ssh_manager=self._ssh)
         )
 
-        # Snapshot after submit
+        # Snapshot immediately after submit so the job finds its working directory
+        # when SLURM schedules it. The SBATCH script already cd's into the snapshot path.
         if snapshot:
             self._run(
                 snapshot_remote(profile, remote_dir, job_id, ssh_manager=self._ssh)
@@ -276,30 +283,55 @@ class SyncClient:
     ) -> ArrayJob:
         """Submit a SLURM job array."""
         profile = self.profile
+        working_dir = kwargs.pop("working_dir", str(Path.cwd()))
+        experiment = kwargs.pop("experiment", None)
+        name = kwargs.pop("name", None)
+        sync = kwargs.pop("sync", True)
+        snapshot = kwargs.pop("snapshot", False)
+
         resources = ResourceRequest(
             gpus=kwargs.pop("gpus", 0),
             nodes=kwargs.pop("nodes", 1),
             time=kwargs.pop("time", None) or "2:00:00",
-            partition=kwargs.get("partition") or profile.partition,
-            account=kwargs.get("account") or profile.account,
+            mem=kwargs.pop("mem", None),
+            cpus=kwargs.pop("cpus", 8),
+            partition=kwargs.pop("partition", None) or profile.partition,
+            account=kwargs.pop("account", None) or profile.account,
+            constraint=kwargs.pop("constraint", None),
+            qos=kwargs.pop("qos", None),
+            mail_type=kwargs.pop("mail_type", None),
+            job_name=name,
+            slurm_kwargs=kwargs.pop("slurm_kwargs", None) or {},
         )
-        working_dir = kwargs.pop("working_dir", str(Path.cwd()))
-        experiment = kwargs.pop("experiment", None)
-        name = kwargs.pop("name", None)
+
+        local_dir = Path.cwd()
+        remote_dir = working_dir
+        if profile.sync and profile.sync.remote:
+            remote_dir = profile.sync.remote
+            if profile.sync.local:
+                local_dir = Path(profile.sync.local)
+
+        if sync:
+            self._run(sync_to_remote(profile, local_dir, remote_dir, ssh_manager=self._ssh))
 
         script = generate_array_wrapper(
             resources=resources,
             profile=profile,
             template=template,
             configs=configs,
-            working_dir=working_dir,
+            working_dir=remote_dir,
             job_name=name,
             throttle=throttle,
         )
 
         job_id = self._run(
-            sbatch_submit(profile, script, working_dir=working_dir, ssh_manager=self._ssh)
+            sbatch_submit(profile, script, working_dir=remote_dir, ssh_manager=self._ssh)
         )
+
+        if snapshot:
+            self._run(
+                snapshot_remote(profile, remote_dir, job_id, ssh_manager=self._ssh)
+            )
 
         array = ArrayJob(
             array_job_id=job_id,
@@ -309,6 +341,21 @@ class SyncClient:
             task_count=len(configs),
             throttle=throttle,
         )
+
+        # Record in local store so the job appears in list/watch
+        record = JobRecord(
+            job_id=job_id,
+            name=name or "array",
+            status=JobStatus.PENDING,
+            profile=profile.name,
+            experiment=experiment,
+            submitted_at=datetime.now(UTC),
+            command=template,
+            resources=resources,
+            working_dir=remote_dir,
+        )
+        self._store.append_job(record)
+
         logger.info("Array job submitted", array_job_id=job_id, tasks=len(configs))
         return array
 
@@ -322,6 +369,33 @@ class SyncClient:
                 self._store.update_job_status(job.job_id, new_status)
             return job.model_copy(update={"status": new_status})
         return job
+
+    def _reconcile_store(self) -> dict[str, JobRecord]:
+        """Reconcile local job cache with SLURM for all non-terminal jobs.
+
+        Queries ``sacct`` for every tracked job that is not in a terminal
+        state, updates the local store, and returns the full record dict
+        (with refreshed statuses).  If the SSH/SLURM query fails, falls
+        back to whatever the local store has — stale data is better than
+        no data.
+        """
+        records = self._store.list_jobs()
+        non_terminal = [
+            jid for jid, rec in records.items() if not rec.status.is_terminal
+        ]
+        if non_terminal:
+            try:
+                infos = self._run(
+                    sacct_query(self.profile, non_terminal, ssh_manager=self._ssh)
+                )
+                for jid, info in infos.items():
+                    rec = records.get(jid)
+                    if rec and info.status != rec.status:
+                        self._store.update_job_status(jid, info.status)
+                        records[jid] = rec.model_copy(update={"status": info.status})
+            except Exception:
+                logger.warning("sacct reconciliation failed, using local cache")
+        return records
 
     def wait_job(
         self,
@@ -408,6 +482,9 @@ class SyncClient:
             wall_time=0.0,
         )
 
+        # Cache the result on the Job so repeated calls to result() are idempotent.
+        job._result_cache[job.job_id] = result
+
         if status in (JobStatus.FAILED, JobStatus.TIMEOUT, JobStatus.CANCELLED) or (
             status == JobStatus.COMPLETED and exit_code != 0
         ):
@@ -431,50 +508,78 @@ class SyncClient:
             return "", offset
         return stdout, offset + len(stdout.encode())
 
-    def job_logs(self, job: Job, *, follow: bool = False, tail: int = 100) -> Iterator[str]:
-        """Yield log lines for a job."""
+    def job_logs(
+        self,
+        job: Job,
+        *,
+        follow: bool = False,
+        tail: int = 100,
+        stream: str = "both",
+    ) -> Iterator[str]:
+        """Yield log lines for a job.
+
+        Args:
+            stream: One of "stdout", "stderr", or "both" (default).
+        """
         out_path, err_path = log_path(job.job_id, job.name, job.working_dir)
         if follow:
-            yield from self._follow_logs(out_path, err_path)
+            yield from self._follow_logs(out_path, err_path, stream=stream)
         else:
-            yield from self._tail_logs(out_path, err_path, tail)
+            yield from self._tail_logs(out_path, err_path, tail, stream=stream)
 
-    def _tail_logs(self, out_path: str, err_path: str, tail: int) -> Iterator[str]:
-        """Yield last N lines of stdout and stderr."""
-        try:
-            _, stdout, _ = self._run(
-                self._ssh.run(self.profile, f"tail -n {tail} '{out_path}'", check=False, timeout=10.0)
-            )
-            if stdout:
-                yield stdout
-        except Exception:
-            pass
-        try:
-            _, stderr, _ = self._run(
-                self._ssh.run(self.profile, f"tail -n {tail} '{err_path}'", check=False, timeout=10.0)
-            )
-            if stderr:
-                yield stderr
-        except Exception:
-            pass
+    def _tail_logs(
+        self,
+        out_path: str,
+        err_path: str,
+        tail: int,
+        *,
+        stream: str = "both",
+    ) -> Iterator[str]:
+        """Yield last N lines of stdout and/or stderr."""
+        if stream in ("both", "stdout"):
+            try:
+                _, stdout, _ = self._run(
+                    self._ssh.run(self.profile, f"tail -n {tail} '{out_path}'", check=False, timeout=10.0)
+                )
+                if stdout:
+                    yield stdout
+            except Exception:
+                pass
+        if stream in ("both", "stderr"):
+            try:
+                _, stderr, _ = self._run(
+                    self._ssh.run(self.profile, f"tail -n {tail} '{err_path}'", check=False, timeout=10.0)
+                )
+                if stderr:
+                    yield stderr
+            except Exception:
+                pass
 
-    def _follow_logs(self, out_path: str, err_path: str) -> Iterator[str]:
+    def _follow_logs(
+        self,
+        out_path: str,
+        err_path: str,
+        *,
+        stream: str = "both",
+    ) -> Iterator[str]:
         """Blocking follow of log files."""
         out_offset = 0
         err_offset = 0
         while True:
-            try:
-                out_data, out_offset = self._run(self._tail_remote(out_path, out_offset))
-                if out_data:
-                    yield out_data
-            except Exception:
-                break
-            try:
-                err_data, err_offset = self._run(self._tail_remote(err_path, err_offset))
-                if err_data:
-                    yield err_data
-            except Exception:
-                break
+            if stream in ("both", "stdout"):
+                try:
+                    out_data, out_offset = self._run(self._tail_remote(out_path, out_offset))
+                    if out_data:
+                        yield out_data
+                except Exception:
+                    break
+            if stream in ("both", "stderr"):
+                try:
+                    err_data, err_offset = self._run(self._tail_remote(err_path, err_offset))
+                    if err_data:
+                        yield err_data
+                except Exception:
+                    break
             import time
 
             time.sleep(2.0)
@@ -487,8 +592,10 @@ class SyncClient:
 
     def job_result(self, job: Job) -> JobResult:
         """Idempotent accessor for job result."""
-        # Try to get from cache or wait
-        return self.wait_job(job, timeout=0.1)
+        cached = job._result_cache.get(job.job_id)
+        if cached is not None:
+            return cached
+        return self.wait_job(job)
 
     def watch(self, experiment: str | None = None, refresh: float = 5.0) -> None:
         """Live watch of jobs."""
@@ -505,8 +612,8 @@ class SyncClient:
                 table.add_column("Experiment", style="yellow")
                 table.add_column("Time", style="blue")
 
-                jobs = self._store.list_jobs()
-                for record in jobs.values():
+                records = self._reconcile_store()
+                for record in records.values():
                     if experiment and record.experiment != experiment:
                         continue
                     status = record.status.value
@@ -537,8 +644,12 @@ class SyncClient:
         status: str | None = None,
         limit: int = 50,
     ) -> list[Job]:
-        """List tracked jobs, optionally filtered."""
-        records = self._store.list_jobs()
+        """List tracked jobs, optionally filtered.
+
+        Reconciles non-terminal jobs with SLURM via ``sacct`` before
+        returning, so statuses reflect the real cluster state.
+        """
+        records = self._reconcile_store()
         jobs: list[Job] = []
         for record in records.values():
             if experiment and record.experiment != experiment:
@@ -562,10 +673,10 @@ class SyncClient:
         return jobs
 
     def status(self, job_id: str) -> Job | None:
-        """Get status for a single job."""
+        """Get status for a single job, refreshing from SLURM."""
         record = self._store.get_job(job_id)
         if record:
-            return Job(
+            job = Job(
                 job_id=record.job_id,
                 name=record.name,
                 status=record.status,
@@ -575,7 +686,9 @@ class SyncClient:
                 resources=record.resources,
                 working_dir=record.working_dir,
             )
-        # Try sacct directly
+            # Refresh from SLURM so the user sees current state
+            return self.refresh_job(job)
+        # Not in local store — try sacct directly
         info = self._run(sacct_query(self.profile, [job_id], ssh_manager=self._ssh))
         slurm_info = info.get(job_id)
         if slurm_info:
@@ -600,41 +713,23 @@ class SyncClient:
 
     def pull(self, job_id: str, local_dir: str | None = None) -> None:
         """Download job results from remote to local."""
-        profile = self.profile
         record = self._store.get_job(job_id)
         if not record:
-            raise SlurmError(f"Job {job_id} not found in local store.")
+            raise SyncError(
+                f"Job {job_id} not found in local store.",
+                hint="Submit or track the job before pulling results.",
+            )
         remote_dir = record.working_dir
         local_dest = Path(local_dir or f"./outputs/{job_id}")
-        local_dest.mkdir(parents=True, exist_ok=True)
 
-        self._ssh._ensure_control_master(profile)
-        sock = self._ssh.control_master_socket(profile)
-        ssh_opts = ["-S", str(sock)]
-        if profile.username:
-            ssh_opts.extend(["-l", profile.username])
-        if profile.key_file:
-            import os
-
-            ssh_opts.extend(["-i", os.path.expanduser(profile.key_file)])
-        ssh_cmd = "ssh " + " ".join(ssh_opts)
-
-        import subprocess
-
-        cmd = [
-            "rsync",
-            "-avz",
-            "-e",
-            ssh_cmd,
-            f"{profile.hostname}:{remote_dir}/",
-            str(local_dest) + "/",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            raise SlurmError(
-                f"Pull failed: {result.stderr}",
-                hint="Check remote directory exists and permissions.",
+        self._run(
+            rsync_from_remote(
+                self.profile,
+                remote_dir,
+                local_dest,
+                ssh_manager=self._ssh,
             )
+        )
 
     # ArrayJob helpers
     def watch_array(self, array: ArrayJob) -> None:

@@ -19,9 +19,9 @@ def sync_cmd(
     local_dir: str = typer.Option(None, "--local"),
     remote_dir: str = typer.Option(None, "--remote"),
 ) -> None:
-    client = SyncClient(profile=profile)
-    client.sync(
-        local_dir=Path(local_dir) if local_dir else None,
-        remote_dir=remote_dir,
-    )
-    console.print("Sync complete.")
+    with SyncClient(profile=profile) as client:
+        client.sync(
+            local_dir=Path(local_dir) if local_dir else None,
+            remote_dir=remote_dir,
+        )
+        console.print("Sync complete.")

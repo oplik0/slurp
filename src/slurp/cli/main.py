@@ -25,7 +25,7 @@ from .config import app as config_app
 from .logs import logs_cmd
 from .pull import pull_cmd
 from .status import list_cmd, status_cmd
-from .submit import submit_array_cmd, submit_cmd
+from .submit import _split_command_args, submit_array_cmd, submit_cmd
 from .sync import sync_cmd
 from .watch import watch_cmd
 from .webui import webui_cmd
@@ -85,24 +85,25 @@ def run_cmd(
 ) -> None:
     from slurp.client import SyncClient
 
-    client = SyncClient(profile=profile)
-    cmd_str = " ".join(command)
-    job = client.submit(
-        cmd_str,
-        gpus=gpus,
-        nodes=nodes,
-        time=time or "2:00:00",
-        partition=partition,
-        account=account,
-        experiment=experiment,
-    )
-    console.print(f"Job {job.job_id} submitted.")
-    try:
-        result = client.wait_job(job, follow_logs=True)
-        console.print(f"Job {job.job_id} completed with exit code {result.exit_code}.")
-        sys.exit(result.exit_code or 0)
-    except Exception as exc:
-        _handle_error(exc, verbose)
+    with SyncClient(profile=profile) as client:
+        command = _split_command_args(command)
+        cmd_str = " ".join(command)
+        job = client.submit(
+            cmd_str,
+            gpus=gpus,
+            nodes=nodes,
+            time=time or "2:00:00",
+            partition=partition,
+            account=account,
+            experiment=experiment,
+        )
+        console.print(f"Job {job.job_id} submitted.")
+        try:
+            result = client.wait_job(job, follow_logs=True)
+            console.print(f"Job {job.job_id} completed with exit code {result.exit_code}.")
+            sys.exit(result.exit_code or 0)
+        except Exception as exc:
+            _handle_error(exc, verbose)
 
 
 # Error handling

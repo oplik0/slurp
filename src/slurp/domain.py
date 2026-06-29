@@ -125,8 +125,8 @@ class Job(BaseModel):
     resources: ResourceRequest = Field(default_factory=ResourceRequest)
     working_dir: str = ""
 
-    # Internal cache for JobResult (weakly referenced via id)
-    _result_cache: dict[str, Any] = PrivateAttr(default_factory=dict)
+    # Internal cache for JobResult (keyed by job_id)
+    _result_cache: dict[str, JobResult] = PrivateAttr(default_factory=dict)
 
     def refresh(self) -> Job:
         """Query sacct for the current state and return a new Job."""

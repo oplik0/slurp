@@ -134,8 +134,8 @@
         sse.addEventListener('log_append', (e) => {
             try {
                 const data = JSON.parse(e.data);
-                if (data.job_id === selectedJobId && data.lines) {
-                    appendLog(data.lines);
+                if (data.job_id === selectedJobId && data.text) {
+                    appendLog(data.text);
                 }
             } catch (err) {
                 console.error('log_append parse error', err);
@@ -351,10 +351,10 @@
         }
     }
 
-    function appendLog(lines) {
-        if (!lines || !lines.length) return;
+    function appendLog(text) {
+        if (!text) return;
         const txt = logOutput.textContent;
-        logOutput.textContent = (txt ? txt + '\n' : '') + lines.join('\n');
+        logOutput.textContent = (txt ? txt + '\n' : '') + text;
         logOutput.scrollTop = logOutput.scrollHeight;
     }
 

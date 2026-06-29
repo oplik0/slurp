@@ -20,15 +20,18 @@ def logs_cmd(
     follow: bool = typer.Option(False, "--follow", "-f"),
     tail: int = typer.Option(100, "--tail"),
     stderr: bool = typer.Option(False, "--stderr"),
+    stdout: bool = typer.Option(False, "--stdout"),
 ) -> None:
-    client = SyncClient(profile=profile)
-    job = client.status(job_id)
-    if not job:
-        console.print(f"[red]Job {job_id} not found.[/red]")
-        raise typer.Exit(1)
-    for line in client.job_logs(job, follow=follow, tail=tail):
-        if stderr:
-            # For now, both out and err are yielded; we can filter
-            pass
-        sys.stdout.write(line)
-        sys.stdout.flush()
+    with SyncClient(profile=profile) as client:
+        job = client.status(job_id)
+        if not job:
+            console.print(f"[red]Job {job_id} not found.[/red]")
+            raise typer.Exit(1)
+        stream = "both"
+        if stderr and not stdout:
+            stream = "stderr"
+        elif stdout and not stderr:
+            stream = "stdout"
+        for line in client.job_logs(job, follow=follow, tail=tail, stream=stream):
+            sys.stdout.write(line)
+            sys.stdout.flush()

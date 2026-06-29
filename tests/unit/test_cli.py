@@ -71,6 +71,8 @@ def mock_client() -> Generator[MagicMock, None, None]:
             resources=ResourceRequest(),
             working_dir="/home/test",
         )
+        instance.__enter__.return_value = instance
+        instance.__exit__.return_value = False
         cls.return_value = instance
         cls2.return_value = instance
         cls3.return_value = instance
@@ -117,6 +119,24 @@ class TestSubmit:
         assert call_kwargs["partition"] == "gpu"
         assert call_kwargs["account"] == "lab-123"
         assert call_kwargs["experiment"] == "sweep-1"
+
+    def test_submit_uses_double_dash_separator(self, mock_client: MagicMock) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "submit",
+                "--gpus",
+                "2",
+                "--",
+                "python",
+                "train.py",
+                "--lr",
+                "0.01",
+            ],
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_client.submit.call_args
+        assert call_kwargs[0][0] == "python train.py --lr 0.01"
 
     def test_submit_dry_run(self, mock_client: MagicMock) -> None:
         result = runner.invoke(
@@ -240,12 +260,57 @@ class TestCancel:
         assert mock_client.cancel_job.call_count == 2
 
 
+    def test_submit_array_with_resource_flags(self, mock_client: MagicMock) -> None:
+        mock_client.submit_array.return_value = MagicMock(
+            array_job_id="12345_0", task_count=3
+        )
+        result = runner.invoke(
+            app,
+            [
+                "submit-array",
+                "python train.py --seed {seed}",
+                "--seed",
+                "1,2,3",
+                "--cpus",
+                "16",
+                "--mem",
+                "64G",
+                "--constraint",
+                "a100",
+                "--qos",
+                "high",
+                "--job-name",
+                "sweep",
+            ],
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_client.submit_array.call_args.kwargs
+        assert call_kwargs["cpus"] == 16
+        assert call_kwargs["mem"] == "64G"
+        assert call_kwargs["constraint"] == "a100"
+        assert call_kwargs["qos"] == "high"
+        assert call_kwargs["name"] == "sweep"
+
+
 class TestLogs:
     def test_logs_basic(self, mock_client: MagicMock) -> None:
         mock_client.job_logs.return_value = iter(["epoch 1: loss 0.5\n"])
         result = runner.invoke(app, ["logs", "12345"])
         assert result.exit_code == 0
         assert "epoch 1" in result.output
+
+    def test_logs_stderr_filter(self, mock_client: MagicMock) -> None:
+        mock_client.job_logs.return_value = iter(["error line\n"])
+        result = runner.invoke(app, ["logs", "12345", "--stderr"])
+        assert result.exit_code == 0
+        mock_client.job_logs.assert_called_once()
+        assert mock_client.job_logs.call_args.kwargs["stream"] == "stderr"
+
+    def test_logs_stdout_filter(self, mock_client: MagicMock) -> None:
+        mock_client.job_logs.return_value = iter(["ok\n"])
+        result = runner.invoke(app, ["logs", "12345", "--stdout"])
+        assert result.exit_code == 0
+        assert mock_client.job_logs.call_args.kwargs["stream"] == "stdout"
 
 
 class TestSync:

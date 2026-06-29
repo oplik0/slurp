@@ -25,6 +25,17 @@ def _ensure_config_dir() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _split_command_args(args: list[str]) -> list[str]:
+    """Return the user command portion after an optional '--' separator.
+
+    Typer already strips the separator in most cases, but some shells and
+    invocation paths leave it in. Dropping it makes command joining safe.
+    """
+    if args and args[0] == "--":
+        return args[1:]
+    return args
+
+
 def _interactive_create_profile() -> str:
     """Prompt the user for basic profile info and write it to profiles.toml."""
     _ensure_config_dir()
@@ -147,6 +158,7 @@ def submit_cmd(
     slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
     sync: bool = typer.Option(True, "--sync/--no-sync"),
 ) -> None:
+    command = _split_command_args(command)
     cmd_str = " ".join(command)
     try:
         client = SyncClient(profile=profile)
@@ -157,55 +169,58 @@ def submit_cmd(
         else:
             raise
 
-    kwargs: dict[str, Any] = {
-        "gpus": gpus,
-        "nodes": nodes,
-        "cpus": cpus,
-        "mem": mem,
-        "time": time,
-        "partition": partition,
-        "account": account,
-        "constraint": constraint,
-        "qos": qos,
-        "mail_type": mail_type,
-        "name": job_name,
-        "experiment": experiment,
-        "snapshot": snapshot,
-        "sync": sync,
-        "slurm_kwargs": {},
-    }
-    for kw in slurm_kwargs:
-        if "=" in kw:
-            k, v = kw.split("=", 1)
-            slurm_kwargs_dict: dict[str, str] = kwargs["slurm_kwargs"]
-            slurm_kwargs_dict[k] = v
+    try:
+        kwargs: dict[str, Any] = {
+            "gpus": gpus,
+            "nodes": nodes,
+            "cpus": cpus,
+            "mem": mem,
+            "time": time,
+            "partition": partition,
+            "account": account,
+            "constraint": constraint,
+            "qos": qos,
+            "mail_type": mail_type,
+            "name": job_name,
+            "experiment": experiment,
+            "snapshot": snapshot,
+            "sync": sync,
+            "slurm_kwargs": {},
+        }
+        for kw in slurm_kwargs:
+            if "=" in kw:
+                k, v = kw.split("=", 1)
+                slurm_kwargs_dict: dict[str, str] = kwargs["slurm_kwargs"]
+                slurm_kwargs_dict[k] = v
 
-    if dry_run:
-        from slurp.core.slurm import generate_sbatch_script
-        from slurp.domain import ResourceRequest
+        if dry_run:
+            from slurp.core.slurm import generate_sbatch_script
+            from slurp.domain import ResourceRequest
 
-        profile_obj = client.profile
-        resources = ResourceRequest(
-            gpus=gpus,
-            nodes=nodes,
-            time=time or "2:00:00",
-            cpus=cpus,
-            partition=partition or profile_obj.partition,
-            account=account or profile_obj.account,
-            job_name=job_name,
-            slurm_kwargs=kwargs["slurm_kwargs"],
-        )
-        script = generate_sbatch_script(
-            resources=resources,
-            profile=profile_obj,
-            command=cmd_str,
-            working_dir=str(Path.cwd()),
-        )
-        console.print(Syntax(script, "bash", theme="monokai"))
-        return
+            profile_obj = client.profile
+            resources = ResourceRequest(
+                gpus=gpus,
+                nodes=nodes,
+                time=time or "2:00:00",
+                cpus=cpus,
+                partition=partition or profile_obj.partition,
+                account=account or profile_obj.account,
+                job_name=job_name,
+                slurm_kwargs=kwargs["slurm_kwargs"],
+            )
+            script = generate_sbatch_script(
+                resources=resources,
+                profile=profile_obj,
+                command=cmd_str,
+                working_dir=str(Path.cwd()),
+            )
+            console.print(Syntax(script, "bash", theme="monokai"))
+            return
 
-    job = client.submit(cmd_str, **kwargs)
-    console.print(f"Job {job.job_id} submitted.")
+        job = client.submit(cmd_str, **kwargs)
+        console.print(f"Job {job.job_id} submitted.")
+    finally:
+        client.close()
 
 
 @app.command(
@@ -219,10 +234,18 @@ def submit_array_cmd(
     profile: str = typer.Option(None, "--profile"),
     gpus: int = typer.Option(0, "--gpus"),
     nodes: int = typer.Option(1, "--nodes"),
+    cpus: int = typer.Option(8, "--cpus"),
+    mem: str = typer.Option(None, "--mem"),
     time: str = typer.Option(None, "--time"),
     partition: str = typer.Option(None, "--partition"),
     account: str = typer.Option(None, "--account"),
+    constraint: str = typer.Option(None, "--constraint"),
+    qos: str = typer.Option(None, "--qos"),
+    mail_type: str = typer.Option(None, "--mail-type"),
+    job_name: str = typer.Option(None, "--job-name"),
     experiment: str = typer.Option(None, "--experiment"),
+    snapshot: bool = typer.Option(False, "--snapshot"),
+    sync: bool = typer.Option(True, "--sync/--no-sync"),
     throttle: int = typer.Option(20, "--throttle"),
     slurm_kwargs: list[str] = typer.Option([], "--slurm-kwargs"),
 ) -> None:
@@ -245,23 +268,34 @@ def submit_array_cmd(
         else:
             raise
 
-    kwargs: dict[str, Any] = {
-        "gpus": gpus,
-        "nodes": nodes,
-        "time": time,
-        "partition": partition,
-        "account": account,
-        "experiment": experiment,
-    }
-    for kw in slurm_kwargs:
-        if "=" in kw:
-            k, v = kw.split("=", 1)
-            kwargs.setdefault("slurm_kwargs", {})[k] = v
+    try:
+        kwargs: dict[str, Any] = {
+            "gpus": gpus,
+            "nodes": nodes,
+            "cpus": cpus,
+            "mem": mem,
+            "time": time,
+            "partition": partition,
+            "account": account,
+            "constraint": constraint,
+            "qos": qos,
+            "mail_type": mail_type,
+            "name": job_name,
+            "experiment": experiment,
+            "snapshot": snapshot,
+            "sync": sync,
+        }
+        for kw in slurm_kwargs:
+            if "=" in kw:
+                k, v = kw.split("=", 1)
+                kwargs.setdefault("slurm_kwargs", {})[k] = v
 
-    array = client.submit_array(
-        template,
-        configs=configs,
-        throttle=throttle,
-        **kwargs,
-    )
-    console.print(f"Array job {array.array_job_id} submitted ({array.task_count} tasks).")
+        array = client.submit_array(
+            template,
+            configs=configs,
+            throttle=throttle,
+            **kwargs,
+        )
+        console.print(f"Array job {array.array_job_id} submitted ({array.task_count} tasks).")
+    finally:
+        client.close()

@@ -17,6 +17,6 @@ def pull_cmd(
     local_dir: str = typer.Option(None, "--local"),
     profile: str = typer.Option(None, "--profile"),
 ) -> None:
-    client = SyncClient(profile=profile)
-    client.pull(job_id, local_dir=local_dir)
-    console.print(f"Pulled job {job_id} to {local_dir or './outputs/' + job_id}.")
+    with SyncClient(profile=profile) as client:
+        client.pull(job_id, local_dir=local_dir)
+        console.print(f"Pulled job {job_id} to {local_dir or './outputs/' + job_id}.")

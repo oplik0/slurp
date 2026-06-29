@@ -17,5 +17,5 @@ def watch_cmd(
     experiment: str = typer.Option(None, "--experiment"),
     refresh: float = typer.Option(5.0, "--refresh"),
 ) -> None:
-    client = SyncClient(profile=profile)
-    client.watch(experiment=experiment, refresh=refresh)
+    with SyncClient(profile=profile) as client:
+        client.watch(experiment=experiment, refresh=refresh)
