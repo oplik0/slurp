@@ -312,13 +312,14 @@ class SlurmDispatcher(Dispatcher):
         client = SyncClient(profile=self._profile)
         profile = client.profile
 
-        # Determine local + remote working dir
-        if profile.sync and profile.sync.remote:
-            working_dir = profile.format_remote()
-            local_dir = Path(profile.sync.local) if profile.sync.local else Path.cwd()
-        else:
-            working_dir = str(Path.cwd())
-            local_dir = Path.cwd()
+        # Local dir for payload serialization. The remote working dir (with
+        # $PROJECT/$SCRATCH expansion) is resolved inside client.submit, so we
+        # read it back from the submitted job rather than duplicating the logic.
+        local_dir = (
+            Path(profile.sync.local)
+            if profile.sync and profile.sync.local
+            else Path.cwd()
+        )
 
         # Serialize — write to local_dir so the payload is inside the
         # synced directory and reaches the remote via rsync.
@@ -348,7 +349,7 @@ class SlurmDispatcher(Dispatcher):
             job_id=job.job_id,
             result_id=result_id,
             profile=profile.name,
-            working_dir=working_dir,
+            working_dir=job.working_dir,
         )
 
     def join(self) -> None:
@@ -461,12 +462,8 @@ class JobBundling(Dispatcher):
                     client = SyncClient(profile=self._profile)
                     profile = client.profile
 
-                    if profile.sync and profile.sync.remote:
-                        working_dir = profile.format_remote()
-                        local_dir = Path(profile.sync.local) if profile.sync.local else Path.cwd()
-                    else:
-                        working_dir = str(Path.cwd())
-                        local_dir = Path.cwd()
+                    # Resolve $PROJECT/$SCRATCH in sync.remote to a literal path.
+                    working_dir, local_dir = client._resolve_working_dir()  # noqa: SLF001
 
                     # Write payloads under local_dir so they get synced to the
                     # remote and land at <remote>/._slurp/payloads/.

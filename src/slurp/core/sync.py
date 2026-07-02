@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -160,3 +162,50 @@ async def snapshot_remote(
             hint="Check remote disk space and permissions.",
         )
     return snapshot_dir
+
+
+async def resolve_remote_env(
+    profile: Profile,
+    path: str,
+    *,
+    ssh_manager: Any,
+) -> str:
+    """Expand ``$VAR``/``${VAR}`` in a remote path to a literal via the login shell.
+
+    SLURM ``#SBATCH`` directives and rsync do not expand shell environment
+    variables, so a ``sync.remote`` like ``"$PROJECT/slurp-projects"`` must be
+    resolved to a literal absolute path before it is used as ``working_dir``
+    (which feeds ``--output``, ``cd``, and rsync). Without this, SLURM opens a
+    directory literally named ``$PROJECT`` and rsync syncs into one.
+
+    Unset variables raise ``SyncError`` rather than expanding to empty -- a
+    silent ``/slurp-projects`` would quietly write into the filesystem root.
+    """
+    if "$" not in path:
+        return path
+    # Rewrite $VAR / ${VAR} into ${VAR:?unset} so an unset var makes the
+    # remote shell exit non-zero (instead of expanding to an empty string).
+    safe = re.sub(r"\$\{?(\w+)\}?", r"${\1:?unset}", path)
+    # eval re-parses the shlex-quoted path so ${VAR:?unset} is expanded by the
+    # remote login shell. shlex.quote single-quotes the path, preventing local
+    # expansion and injection; eval then expands ${VAR} on the remote side.
+    cmd = f"eval echo {shlex.quote(safe)}"
+    exit_code, stdout, _ = await ssh_manager.run(
+        profile, cmd, timeout=10.0, check=False
+    )
+    if exit_code != 0:
+        raise SyncError(
+            f"Unset environment variable in remote path {path!r}",
+            hint=(
+                "Run `echo $PROJECT $SCRATCH` on the login node to check. "
+                "Training accounts on JURECA have neither set."
+            ),
+        )
+    # ssh_manager is typed Any, so stdout is Any -- coerce to str for mypy.
+    resolved = str(stdout).strip()
+    if not resolved:
+        raise SyncError(
+            f"Resolved remote path is empty: {path!r}",
+            hint="Check $PROJECT/$SCRATCH on the login node.",
+        )
+    return resolved

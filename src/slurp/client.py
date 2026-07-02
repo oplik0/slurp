@@ -26,7 +26,7 @@ from slurp.core.slurm import (
 )
 from slurp.core.ssh import SSHManager
 from slurp.core.store import JobStore, LogOffsetStore
-from slurp.core.sync import rsync_from_remote, snapshot_remote, sync_to_remote
+from slurp.core.sync import resolve_remote_env, rsync_from_remote, snapshot_remote, sync_to_remote
 from slurp.domain import (
     ArrayJob,
     Job,
@@ -197,6 +197,28 @@ class SyncClient:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result()
 
+    def _resolve_working_dir(self) -> tuple[str, Path]:
+        """Return ``(remote_dir, local_dir)`` with ``$VAR`` expanded to literals.
+
+        ``sync.remote`` may contain cluster env vars (``$PROJECT``/``$SCRATCH``)
+        that ``#SBATCH --output`` and rsync do not expand. Resolve them once via
+        the login shell so ``working_dir`` is a literal absolute path everywhere
+        downstream (sync, cd, --output, snapshots, stored job records). When the
+        path has no ``$`` this is a pure no-op -- no SSH round-trip.
+        """
+        profile = self.profile
+        local_dir = Path.cwd()
+        remote_dir = str(local_dir)
+        if profile.sync and profile.sync.remote:
+            remote_dir = profile.format_remote()
+            if "$" in remote_dir:
+                remote_dir = self._run(
+                    resolve_remote_env(profile, remote_dir, ssh_manager=self._ssh)
+                )
+            if profile.sync.local:
+                local_dir = Path(profile.sync.local)
+        return remote_dir, local_dir
+
     def _sync_venv(self, remote_dir: str) -> None:
         """Ensure the remote venv is up-to-date via ``uv sync``.
 
@@ -333,12 +355,10 @@ class SyncClient:
         )
 
         local_dir = Path.cwd()
-        remote_dir = working_dir or str(local_dir)
-
         if profile.sync and profile.sync.remote:
-            remote_dir = profile.format_remote()
-            if profile.sync.local:
-                local_dir = Path(profile.sync.local)
+            remote_dir, local_dir = self._resolve_working_dir()
+        else:
+            remote_dir = working_dir or str(local_dir)
 
         # Idempotency check
         hash_key = _idempotency_hash(command, resources, remote_dir, profile.name)
@@ -449,11 +469,10 @@ class SyncClient:
         )
 
         local_dir = Path.cwd()
-        remote_dir = working_dir
         if profile.sync and profile.sync.remote:
-            remote_dir = profile.format_remote()
-            if profile.sync.local:
-                local_dir = Path(profile.sync.local)
+            remote_dir, local_dir = self._resolve_working_dir()
+        else:
+            remote_dir = working_dir
 
         if sync:
             self._run(sync_to_remote(profile, local_dir, remote_dir, ssh_manager=self._ssh))

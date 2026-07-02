@@ -22,9 +22,19 @@
 # Stages/2024 in older templates is stale. Load only what your job needs --
 # importing PyTorch just to run `hostname` wastes time and can fail.
 #
-# Remote working dir: $PROJECT/$SCRATCH are unset for training accounts and
-# /p/project/<account> does not exist; $HOME (/p/home/jusers/<user>/jureca) is
-# writable and a safe default. Adjust to a project scratch dir for real workloads.
+# Remote working dir: $PROJECT is the JSC-recommended location for source code,
+# binaries, and venvs (persistent, backed up). slurp resolves $PROJECT/$SCRATCH
+# to a literal path via the login shell at submit time, so they work in
+# sync.remote even though #SBATCH --output does NOT shell-expand $VAR on its own.
+# Do NOT use $HOME: it has a tight, non-raised file-count quota (~80k files) that
+# synced code + slurm-*.out logs + .slurp/runs/<job_id>/ snapshot copies will blow
+# through.
+#
+# Training accounts (trainingNNNN): $PROJECT and $SCRATCH are UNSET, and
+# /p/project/<account> does not exist. Use a literal scratch path instead:
+#   remote = "/p/scratch/{account}/{username}/slurp-projects"
+# Run `echo $PROJECT $SCRATCH` on the login node to check; if both are empty,
+# you are on a training account -- use the scratch literal above.
 
 [profiles.jureca]
 hostname = "jureca.fz-juelich.de"
@@ -47,9 +57,9 @@ gpu_flag_style = "gres"
 # your project root.
 # [profiles.jureca.venv]
 # strategy = "uv-sync"
-# path = "$HOME/slurp-projects/.venv"
+# path = "$PROJECT/slurp-projects/.venv"  # shell-expanded where used (no slurp resolution needed for venv.path)
 # extras = ["cu121"]        # or all_extras = true
 
 [profiles.jureca.sync]
 local = "."
-remote = "/p/home/jusers/{username}/jureca/slurp-projects"  # {username}/{account} auto-substituted
+remote = "$PROJECT/slurp-projects"  # slurp resolves $PROJECT at submit time; NOT $HOME (file-count quota)

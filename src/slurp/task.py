@@ -175,8 +175,9 @@ class TaskFunction:
         profile = client.profile
 
         if profile.sync and profile.sync.remote:
-            working_dir = profile.format_remote()
-            local_dir = Path(profile.sync.local) if profile.sync.local else Path.cwd()
+            # Resolve $PROJECT/$SCRATCH in sync.remote to a literal path so it
+            # survives #SBATCH --output (which does not shell-expand $VAR).
+            working_dir, local_dir = client._resolve_working_dir()  # noqa: SLF001
         else:
             working_dir = str(Path.cwd())
             local_dir = Path.cwd()

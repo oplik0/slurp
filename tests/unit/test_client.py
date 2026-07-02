@@ -294,6 +294,80 @@ class TestSubmitArrayStore:
         assert record.profile == "test"
 
 
+class TestSubmitEnvResolution:
+    """Verify $PROJECT/$SCRATCH in sync.remote are resolved to literal paths."""
+
+    def test_submit_resolves_project_in_remote(
+        self, mock_ssh: MagicMock, tmp_path: Path
+    ) -> None:
+        """A $PROJECT in sync.remote must be expanded before it reaches
+        sbatch (which puts it in #SBATCH --output, where $VAR does NOT expand)
+        and before it is stored in the JobRecord."""
+        proj_profile = Profile(
+            name="test",
+            hostname="hpc.local",
+            username="user",
+            partition="gpu",
+            account="lab",
+            sync=Profile.SyncConfig(local=".", remote="$PROJECT/slurp-projects"),
+        )
+        store_path = tmp_path / "jobs.json"
+        offset_path = tmp_path / "log_offsets.json"
+        with (
+            patch("slurp.client.SSHManager", return_value=mock_ssh),
+            patch("slurp.core.store.DEFAULT_STORE_PATH", store_path),
+            patch("slurp.core.store.DEFAULT_OFFSET_PATH", offset_path),
+        ):
+            client = SyncClient(profile=proj_profile)
+
+        # resolve_remote_env SSHes `eval echo '${PROJECT:?unset}/...'; reply
+        # with the resolved literal. Other SSH calls (none expected here since
+        # sync/sbatch are patched) get an empty success.
+        async def fake_run(profile, command, **kwargs):
+            if command.startswith("eval echo"):
+                return (0, "/p/projects/cproj/slurp-projects\n", "")
+            return (0, "", "")
+
+        mock_ssh.run = AsyncMock(side_effect=fake_run)
+
+        async def fake_sbatch(profile, script, *, working_dir, ssh_manager):
+            # working_dir fed to sbatch (and thus #SBATCH --output) must be
+            # the resolved literal, never the raw $PROJECT template.
+            assert working_dir == "/p/projects/cproj/slurp-projects", working_dir
+            assert "$PROJECT" not in script, "unexpanded $VAR leaked into sbatch script"
+            return "60000"
+
+        with (
+            patch("slurp.client.sbatch_submit", side_effect=fake_sbatch),
+            patch("slurp.client.sync_to_remote", new_callable=AsyncMock),
+        ):
+            job = client.submit("python train.py", gpus=1)
+
+        # Stored Job + JobRecord both carry the resolved literal, so later
+        # pull/logs (which read record.working_dir) hit the right remote path.
+        assert job.working_dir == "/p/projects/cproj/slurp-projects"
+        record = client._store.get_job("60000")
+        assert record is not None
+        assert record.working_dir == "/p/projects/cproj/slurp-projects"
+
+    def test_submit_literal_remote_makes_no_ssh_for_resolution(
+        self, client: SyncClient, mock_ssh: MagicMock
+    ) -> None:
+        """A remote with no $VAR must not SSH just to resolve it."""
+        async def fake_sbatch(profile, script, *, working_dir, ssh_manager):
+            return "60001"
+
+        with (
+            patch("slurp.client.sbatch_submit", side_effect=fake_sbatch),
+            patch("slurp.client.sync_to_remote", new_callable=AsyncMock),
+        ):
+            client.submit("python train.py", gpus=1)
+
+        # No eval echo command should have been issued.
+        for call in mock_ssh.run.call_args_list:
+            assert not call.args[1].startswith("eval echo"), call.args[1]
+
+
 # ── _sync_venv ────────────────────────────────────────────────────────
 
 

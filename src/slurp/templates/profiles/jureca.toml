@@ -1,5 +1,6 @@
-# JURECA profile template
-# Usage: slurp config add-profile jureca --hostname jrlogin --user $USER --partition dc-gpu --account <account>
+# JURECA profile template (abbreviated; this copy is stale -- Stages/2024, jrlogin).
+# For the maintained, verified template see templates/jureca.toml at the repo root.
+# Usage: slurp config add-profile jureca --hostname jureca.fz-juelich.de --user $USER --partition dc-gpu --account <account>
 
 [profiles.jureca]
 hostname = "jrlogin"
@@ -21,5 +22,5 @@ cpu_bind = "cores"
 gpu_flag_style = "gres"
 
 [profiles.jureca.sync]
-local = ""
-remote = ""
+local = "."
+remote = "$PROJECT/slurp-projects"  # slurp resolves $PROJECT; NOT $HOME. See templates/jureca.toml

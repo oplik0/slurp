@@ -200,10 +200,20 @@ def submit_cmd(
             profile_obj = client.profile
             # Mirror client.submit()'s remote working-dir resolution so the
             # dry-run shows the paths a real submission would use, not the
-            # local cwd.
-            remote_dir = str(Path.cwd())
+            # local cwd. This expands $PROJECT/$SCRATCH via the login shell;
+            # if the cluster is unreachable, fall back to the raw template
+            # path so --dry-run still works offline.
             if profile_obj.sync and profile_obj.sync.remote:
-                remote_dir = profile_obj.format_remote()
+                try:
+                    remote_dir, _ = client._resolve_working_dir()  # noqa: SLF001
+                except Exception as exc:
+                    remote_dir = profile_obj.format_remote()
+                    console.print(
+                        f"[yellow]Could not resolve $VAR in remote path "
+                        f"({exc}); showing raw template path.[/yellow]"
+                    )
+            else:
+                remote_dir = str(Path.cwd())
             resources = ResourceRequest(
                 gpus=gpus,
                 nodes=nodes,

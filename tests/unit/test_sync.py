@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from slurp.core.sync import _is_git_dirty, snapshot_remote, sync_to_remote
+from slurp.core.sync import _is_git_dirty, resolve_remote_env, snapshot_remote, sync_to_remote
 from slurp.domain import Profile
 
 
@@ -169,3 +169,85 @@ class TestSnapshotRemote:
 
         with pytest.raises(SyncError, match="Snapshot failed"):
             await snapshot_remote(profile, "/remote/dir", "123", ssh_manager=mock_ssh)
+
+
+class TestResolveRemoteEnv:
+    """Tests for resolve_remote_env ($PROJECT/$SCRATCH expansion)."""
+
+    async def test_no_dollar_is_noop(self) -> None:
+        """A path without $VAR must not trigger an SSH round-trip."""
+        profile = Profile(name="test", hostname="hpc")
+        mock_ssh = MagicMock()
+        mock_ssh.run = AsyncMock()
+
+        result = await resolve_remote_env(
+            profile, "/p/scratch/proj/slurp", ssh_manager=mock_ssh
+        )
+        assert result == "/p/scratch/proj/slurp"
+        mock_ssh.run.assert_not_called()
+
+    async def test_resolves_project(self) -> None:
+        profile = Profile(name="test", hostname="hpc")
+        mock_ssh = MagicMock()
+        mock_ssh.run = AsyncMock(
+            return_value=(0, "/p/projects/cproj/slurp-projects\n", "")
+        )
+
+        result = await resolve_remote_env(
+            profile, "$PROJECT/slurp-projects", ssh_manager=mock_ssh
+        )
+        assert result == "/p/projects/cproj/slurp-projects"
+        # The sent command must rewrite $PROJECT into ${PROJECT:?unset} so an
+        # unset var fails loudly instead of expanding to empty.
+        sent = mock_ssh.run.call_args.args[1]
+        assert "${PROJECT:?unset}" in sent
+
+    async def test_resolves_braced_var(self) -> None:
+        profile = Profile(name="test", hostname="hpc")
+        mock_ssh = MagicMock()
+        mock_ssh.run = AsyncMock(return_value=(0, "/scratch/data\n", ""))
+
+        result = await resolve_remote_env(
+            profile, "${SCRATCH}/data", ssh_manager=mock_ssh
+        )
+        assert result == "/scratch/data"
+        sent = mock_ssh.run.call_args.args[1]
+        assert "${SCRATCH:?unset}" in sent
+
+    async def test_unset_var_raises(self) -> None:
+        """Training accounts have $PROJECT unset -- must error, not silently
+        collapse to /slurp-projects (filesystem root)."""
+        profile = Profile(name="test", hostname="hpc")
+        mock_ssh = MagicMock()
+        mock_ssh.run = AsyncMock(return_value=(1, "", "bash: PROJECT: unset"))
+
+        from slurp.errors import SyncError
+
+        with pytest.raises(SyncError, match="Unset environment variable"):
+            await resolve_remote_env(
+                profile, "$PROJECT/slurp-projects", ssh_manager=mock_ssh
+            )
+
+    async def test_empty_result_raises(self) -> None:
+        profile = Profile(name="test", hostname="hpc")
+        mock_ssh = MagicMock()
+        mock_ssh.run = AsyncMock(return_value=(0, "\n", ""))
+
+        from slurp.errors import SyncError
+
+        with pytest.raises(SyncError, match="empty"):
+            await resolve_remote_env(
+                profile, "$PROJECT/slurp-projects", ssh_manager=mock_ssh
+            )
+
+    async def test_multiple_vars_resolved(self) -> None:
+        profile = Profile(name="test", hostname="hpc")
+        mock_ssh = MagicMock()
+        mock_ssh.run = AsyncMock(
+            return_value=(0, "/p/projects/cproj/scratch/x\n", "")
+        )
+
+        result = await resolve_remote_env(
+            profile, "$PROJECT/$SCRATCH/x", ssh_manager=mock_ssh
+        )
+        assert result == "/p/projects/cproj/scratch/x"

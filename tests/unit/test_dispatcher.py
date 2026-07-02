@@ -264,6 +264,8 @@ class TestJobBundlingInterruptRace:
         mock_client._run.return_value = "12345"
         mock_client._sync_venv = MagicMock()
         mock_client._ssh = MagicMock()
+        # _resolve_working_dir returns (remote_dir, local_dir).
+        mock_client._resolve_working_dir.return_value = ("/remote", Path("."))
 
         return bundling, mock_client
 
