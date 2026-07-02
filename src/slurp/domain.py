@@ -107,6 +107,9 @@ class Profile(BaseModel):
     class SyncConfig(BaseModel):
         local: str
         remote: str
+        extra_includes: list[str] = Field(default_factory=list)
+        """Extra rsync --include patterns, applied before the .gitignore filter.
+        Use this to sync gitignored directories (e.g. data/) to the remote."""
 
     class VenvConfig(BaseModel):
         """Remote venv management strategy.

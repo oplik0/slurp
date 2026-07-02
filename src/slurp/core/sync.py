@@ -86,12 +86,18 @@ async def sync_to_remote(
         "-avz",
         "--delete",
         "--include=._slurp/***",  # sync task payloads despite .gitignore
+    ]
+    # Extra includes from the profile (e.g. gitignored data/ dirs).
+    if profile.sync and profile.sync.extra_includes:
+        for pattern in profile.sync.extra_includes:
+            cmd.append(f"--include={pattern}")
+    cmd.extend([
         "--filter=:- .gitignore",
         "-e",
         ssh_cmd,
         str(local_dir) + "/",
         f"{profile.hostname}:{remote_dir}/",
-    ]
+    ])
     _run_rsync(cmd)
 
     # Check dirty git
