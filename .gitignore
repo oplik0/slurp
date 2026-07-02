@@ -37,3 +37,7 @@ Thumbs.db
 
 # slurp task runtime (payloads, results, shared objects)
 ._slurp/
+
+# Vendored reference repos kept locally for development only (Run, cispa-hackathon,
+# srunx, submitit). Untracked on purpose — not part of slurp.
+.prior-art/

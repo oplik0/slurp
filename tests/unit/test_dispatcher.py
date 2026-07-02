@@ -287,9 +287,9 @@ class TestJobBundlingInterruptRace:
             patch("slurp.core.ssh.SSHManager", return_value=MagicMock()),
             patch("slurp.core.sync.sync_to_remote", new_callable=AsyncMock),
             patch("slurp.dispatcher._cancel_job_ids") as mock_cancel,
+            pytest.raises(KeyboardInterrupt),
         ):
-            with pytest.raises(KeyboardInterrupt):
-                bundling.flush()
+            bundling.flush()
 
         # The untracked job_id should appear in one of the _cancel_job_ids calls
         cancel_args = [c.args[0] for c in mock_cancel.call_args_list]

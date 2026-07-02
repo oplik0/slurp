@@ -81,6 +81,11 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# `.prior-art/` holds vendored reference repos (Run, cispa-hackathon, srunx,
+# submitit) kept locally for development only — untracked and gitignored.
+# Explicit exclude is belt-and-suspenders in case ruff runs with
+# --no-respect-gitignore.
+extend-exclude = [".prior-art"]
 
 [tool.ruff.lint]
 select = [
