@@ -39,6 +39,7 @@ app = typer.Typer(
     add_completion=True,
 )
 
+
 # Global options
 def _global_opts(
     profile: str = typer.Option(None, "--profile", help="Profile name"),

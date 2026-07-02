@@ -156,9 +156,7 @@ class SyncClient:
             return
         # Close connections on their own loop (thread-safe context).
         try:
-            asyncio.run_coroutine_threadsafe(self._shutdown_async(), self._loop).result(
-                timeout=5.0
-            )
+            asyncio.run_coroutine_threadsafe(self._shutdown_async(), self._loop).result(timeout=5.0)
         except Exception:
             pass
         self._loop.call_soon_threadsafe(self._loop.stop)
@@ -260,9 +258,7 @@ class SyncClient:
         # compute nodes see it via the shared filesystem.
         account = self.profile.account or ""
         username = self.profile.username or ""
-        uv_base = (
-            f"/p/scratch/{account}/{username}/.uv" if account and username else '"$HOME/.uv"'
-        )
+        uv_base = f"/p/scratch/{account}/{username}/.uv" if account and username else '"$HOME/.uv"'
         cmd = (
             f"cd {remote_dir} && "
             f"mkdir -p {uv_base}/cache {uv_base}/python && "
@@ -271,8 +267,8 @@ class SyncClient:
             f'NEW_HASH=$(sha256sum uv.lock 2>/dev/null | cut -d" " -f1) && '
             f'OLD_HASH=$(cat {venv_path}/.lockhash 2>/dev/null || echo "") && '
             f'if [ "$NEW_HASH" != "$OLD_HASH" ]; then '
-            f'UV_PROJECT_ENVIRONMENT={venv_path} uv sync --frozen --no-dev {python_pin} {extras_args} && '
-            f'mkdir -p {venv_path} && '
+            f"UV_PROJECT_ENVIRONMENT={venv_path} uv sync --frozen --no-dev {python_pin} {extras_args} && "
+            f"mkdir -p {venv_path} && "
             f'echo "$NEW_HASH" > {venv_path}/.lockhash; '
             f"fi"
         )
@@ -388,9 +384,7 @@ class SyncClient:
         # Snapshot immediately after submit so the job finds its working directory
         # when SLURM schedules it. The SBATCH script already cd's into the snapshot path.
         if snapshot:
-            self._run(
-                snapshot_remote(profile, remote_dir, job_id, ssh_manager=self._ssh)
-            )
+            self._run(snapshot_remote(profile, remote_dir, job_id, ssh_manager=self._ssh))
 
         # Create Job
         job = Job(
@@ -482,9 +476,7 @@ class SyncClient:
         )
 
         if snapshot:
-            self._run(
-                snapshot_remote(profile, remote_dir, job_id, ssh_manager=self._ssh)
-            )
+            self._run(snapshot_remote(profile, remote_dir, job_id, ssh_manager=self._ssh))
 
         array = ArrayJob(
             array_job_id=job_id,
@@ -572,14 +564,10 @@ class SyncClient:
         no data.
         """
         records = self._store.list_jobs()
-        non_terminal = [
-            jid for jid, rec in records.items() if not rec.status.is_terminal
-        ]
+        non_terminal = [jid for jid, rec in records.items() if not rec.status.is_terminal]
         if non_terminal:
             try:
-                infos = self._run(
-                    sacct_query(self.profile, non_terminal, ssh_manager=self._ssh)
-                )
+                infos = self._run(sacct_query(self.profile, non_terminal, ssh_manager=self._ssh))
                 for jid, info in infos.items():
                     rec = records.get(jid)
                     if rec and info.status != rec.status:
@@ -614,9 +602,7 @@ class SyncClient:
             if follow_logs:
                 out_path, err_path = log_path(job.job_id, job.name, job.working_dir)
                 try:
-                    out_data, new_out = self._run(
-                        self._tail_remote(out_path, out_offset)
-                    )
+                    out_data, new_out = self._run(self._tail_remote(out_path, out_offset))
                     if out_data:
                         sys.stdout.write(out_data)
                         sys.stdout.flush()
@@ -624,9 +610,7 @@ class SyncClient:
                 except Exception:
                     pass
                 try:
-                    err_data, new_err = self._run(
-                        self._tail_remote(err_path, err_offset)
-                    )
+                    err_data, new_err = self._run(self._tail_remote(err_path, err_offset))
                     if err_data:
                         sys.stderr.write(err_data)
                         sys.stderr.flush()
@@ -730,7 +714,9 @@ class SyncClient:
         if stream in ("both", "stdout"):
             try:
                 _, stdout, _ = self._run(
-                    self._ssh.run(self.profile, f"tail -n {tail} '{out_path}'", check=False, timeout=10.0)
+                    self._ssh.run(
+                        self.profile, f"tail -n {tail} '{out_path}'", check=False, timeout=10.0
+                    )
                 )
                 if stdout:
                     yield stdout
@@ -739,7 +725,9 @@ class SyncClient:
         if stream in ("both", "stderr"):
             try:
                 _, stderr, _ = self._run(
-                    self._ssh.run(self.profile, f"tail -n {tail} '{err_path}'", check=False, timeout=10.0)
+                    self._ssh.run(
+                        self.profile, f"tail -n {tail} '{err_path}'", check=False, timeout=10.0
+                    )
                 )
                 if stderr:
                     yield stderr
@@ -915,26 +903,26 @@ class SyncClient:
         # for the remote user), pass $USER so squeue filters by the remote
         # user instead of returning every job on the cluster.
         user = self.profile.username or "$USER"
-        states = self._run(
-            squeue_query(self.profile, ssh_manager=self._ssh, user=user)
-        )
+        states = self._run(squeue_query(self.profile, ssh_manager=self._ssh, user=user))
         if not states:
             return None
         # Direct hit (non-array pending/running job).
         if job_id in states:
             return Job(
-                job_id=job_id, name="unknown", status=states[job_id],
+                job_id=job_id,
+                name="unknown",
+                status=states[job_id],
                 profile=self.profile.name,
             )
         # Array task: squeue collapses to "<parent>_[0-11%20]". Match by parent
         # prefix — if the array is still active, the task is pending/running.
         parent = job_id.rsplit("_", 1)[0] if "_" in job_id else job_id
         for sq_id, st in states.items():
-            if sq_id == parent or sq_id.startswith(f"{parent}_") or sq_id.startswith(
-                f"{parent}["
-            ):
+            if sq_id == parent or sq_id.startswith(f"{parent}_") or sq_id.startswith(f"{parent}["):
                 return Job(
-                    job_id=job_id, name="unknown", status=st,
+                    job_id=job_id,
+                    name="unknown",
+                    status=st,
                     profile=self.profile.name,
                 )
         return None
@@ -982,9 +970,7 @@ class SyncClient:
         for i in range(array.task_count):
             if task_id is not None and i != task_id:
                 continue
-            out_path, err_path = log_path(
-                array.array_job_id, array.name, "", task_id=i
-            )
+            out_path, err_path = log_path(array.array_job_id, array.name, "", task_id=i)
             if task_id is None:
                 yield f"--- Task {i} ---"
             yield from self._tail_logs(out_path, err_path, tail)

@@ -388,9 +388,9 @@ class JobBundling(Dispatcher):
     def __init__(self, max_size: int, *, profile: str | None = None) -> None:
         self.max_size = max_size
         self._profile = profile
-        self._buffer: dict[
-            tuple[str, ...], list[tuple[Any, tuple[Any, ...], dict[str, Any]]]
-        ] = defaultdict(list)
+        self._buffer: dict[tuple[str, ...], list[tuple[Any, tuple[Any, ...], dict[str, Any]]]] = (
+            defaultdict(list)
+        )
         self._pending_job_ids: list[str] = []
         self._inner: Dispatcher | None = None
 
@@ -431,9 +431,7 @@ class JobBundling(Dispatcher):
         if self._inner is not None and self._inner.is_local():
             for _key, calls in self._buffer.items():
                 for func, args, kwargs in calls:
-                    self._inner.dispatch(
-                        func, args, kwargs, {}, collect_result=False
-                    )
+                    self._inner.dispatch(func, args, kwargs, {}, collect_result=False)
             self._buffer.clear()
             return []
 
@@ -465,9 +463,7 @@ class JobBundling(Dispatcher):
 
                     if profile.sync and profile.sync.remote:
                         working_dir = profile.format_remote()
-                        local_dir = (
-                            Path(profile.sync.local) if profile.sync.local else Path.cwd()
-                        )
+                        local_dir = Path(profile.sync.local) if profile.sync.local else Path.cwd()
                     else:
                         working_dir = str(Path.cwd())
                         local_dir = Path.cwd()
@@ -494,7 +490,10 @@ class JobBundling(Dispatcher):
 
                     client._run(  # noqa: SLF001
                         sync_to_remote(
-                            profile, local_dir, working_dir, ssh_manager=client._ssh  # noqa: SLF001
+                            profile,
+                            local_dir,
+                            working_dir,
+                            ssh_manager=client._ssh,  # noqa: SLF001
                         )
                     )
 

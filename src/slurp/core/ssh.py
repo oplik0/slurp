@@ -158,7 +158,7 @@ class SSHManager:
                 last_exc = exc
                 if not exc.retryable or attempt >= max_retries:
                     raise
-                delay = base_delay * (2 ** attempt)
+                delay = base_delay * (2**attempt)
                 await asyncio.sleep(min(delay, 30.0))
                 # Force reconnect
                 async with self._lock:

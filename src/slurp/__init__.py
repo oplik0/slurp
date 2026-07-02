@@ -232,5 +232,3 @@ def log_progress(
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")
         f.flush()
-
-

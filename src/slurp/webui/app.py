@@ -62,8 +62,7 @@ def create_app() -> FastAPI:
     """
     if FastAPI is None:
         raise RuntimeError(
-            "Web UI dependencies are missing. "
-            "Install them with: pip install slurp[web]"
+            "Web UI dependencies are missing. Install them with: pip install slurp[web]"
         )
 
     _ensure_directories()
@@ -103,8 +102,7 @@ def main() -> None:
 
     if uvicorn is None:
         print(
-            "Error: uvicorn is required to run the web UI.\n"
-            "Install with: pip install slurp[web]",
+            "Error: uvicorn is required to run the web UI.\nInstall with: pip install slurp[web]",
             file=sys.stderr,
         )
         sys.exit(1)

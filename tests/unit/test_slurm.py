@@ -225,5 +225,3 @@ class TestBuildTorchrunCommand:
         profile = Profile(name="test", hostname="hpc", mpi_mode="pmi2")
         cmd = build_torchrun_command("python train.py", profile, nodes=2, gpus_per_node=4)
         assert "--mpi=pmi2" in cmd
-
-

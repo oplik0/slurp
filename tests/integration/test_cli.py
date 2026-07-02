@@ -58,8 +58,9 @@ local = "."
 remote = "/home/testuser/project"
 """
     )
-    with patch("slurp.cli.config.CONFIG_FILE", config_file), patch(
-        "slurp.client.Path.home", return_value=tmp_path
+    with (
+        patch("slurp.cli.config.CONFIG_FILE", config_file),
+        patch("slurp.client.Path.home", return_value=tmp_path),
     ):
         yield config_file
 
@@ -69,8 +70,9 @@ def mock_ssh() -> Generator[_MockSSHManager, None, None]:
     """Mock SSHManager to avoid real network connections."""
     _MockSSHManager._run_mock.reset_mock()
     _MockSSHManager._run_mock.return_value = (0, "Submitted batch job 99999", "")
-    with patch("slurp.client.SSHManager", _MockSSHManager), patch(
-        "slurp.core.ssh.SSHManager", _MockSSHManager
+    with (
+        patch("slurp.client.SSHManager", _MockSSHManager),
+        patch("slurp.core.ssh.SSHManager", _MockSSHManager),
     ):
         yield _MockSSHManager()
 
@@ -80,8 +82,9 @@ def mock_store(tmp_path: Path) -> Generator[Path, None, None]:
     """Mock job store to use a temporary directory."""
     store_path = tmp_path / "jobs.json"
     offset_path = tmp_path / "log_offsets.json"
-    with patch("slurp.core.store.DEFAULT_STORE_PATH", store_path), patch(
-        "slurp.core.store.DEFAULT_OFFSET_PATH", offset_path
+    with (
+        patch("slurp.core.store.DEFAULT_STORE_PATH", store_path),
+        patch("slurp.core.store.DEFAULT_OFFSET_PATH", offset_path),
     ):
         yield store_path
 
@@ -96,7 +99,11 @@ def mock_rsync() -> Generator[MagicMock, None, None]:
 
 class TestSubmitWorkflow:
     def test_submit_and_status(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         result = runner.invoke(
             app,
@@ -120,7 +127,11 @@ class TestSubmitWorkflow:
         assert len(store["jobs"]) == 1
 
     def test_submit_array_workflow(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         mock_ssh.run.return_value = (0, "Submitted batch job 100000", "")
         result = runner.invoke(
@@ -140,7 +151,11 @@ class TestSubmitWorkflow:
         assert "submitted" in result.output
 
     def test_cancel_job(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         mock_ssh.run.return_value = (0, "Submitted batch job 100001", "")
         runner.invoke(
@@ -184,7 +199,11 @@ class TestSubmitWorkflow:
             assert "Sync complete" in result.output
 
     def test_dry_run_output(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         result = runner.invoke(
             app,
@@ -207,7 +226,11 @@ class TestSubmitWorkflow:
         assert "--nodes=2" in result.output
 
     def test_list_and_watch(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         # Submit a few jobs
         mock_ssh.run.return_value = (0, "Submitted batch job 100002", "")
@@ -268,7 +291,11 @@ class TestSubmitWorkflow:
         assert "100003" not in result.output
 
     def test_logs_output(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         mock_ssh.run.return_value = (0, "Submitted batch job 100004", "")
         runner.invoke(
@@ -298,7 +325,11 @@ class TestSubmitWorkflow:
         assert "epoch 1" in result.output or "epoch 1" in result.stderr
 
     def test_pull_output(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         mock_ssh.run.return_value = (0, "Submitted batch job 100005", "")
         runner.invoke(
@@ -327,7 +358,11 @@ class TestSubmitWorkflow:
             assert "Pulled job 100005" in result.output
 
     def test_slurm_error_on_submit(
-        self, mock_profiles_toml: Path, mock_ssh: _MockSSHManager, mock_store: Path, mock_rsync: MagicMock
+        self,
+        mock_profiles_toml: Path,
+        mock_ssh: _MockSSHManager,
+        mock_store: Path,
+        mock_rsync: MagicMock,
     ) -> None:
         mock_ssh.run.return_value = (1, "", "sbatch: error: Batch job submission failed")
         result = runner.invoke(
@@ -342,4 +377,8 @@ class TestSubmitWorkflow:
             ],
         )
         assert result.exit_code == 1
-        assert isinstance(result.exception, Exception) or "sbatch" in result.output or "SlurmError" in result.output
+        assert (
+            isinstance(result.exception, Exception)
+            or "sbatch" in result.output
+            or "SlurmError" in result.output
+        )

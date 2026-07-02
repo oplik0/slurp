@@ -90,7 +90,11 @@ class TestConnect:
         profile = Profile(name="test", hostname="hpc.local")
 
         with (
-            patch("asyncssh.connect", new_callable=AsyncMock, side_effect=asyncssh.Error(1, "conn refused")),
+            patch(
+                "asyncssh.connect",
+                new_callable=AsyncMock,
+                side_effect=asyncssh.Error(1, "conn refused"),
+            ),
             pytest.raises(SSHError, match="SSH connection to hpc.local failed"),
         ):
             await manager._connect(profile)
@@ -252,10 +256,12 @@ class TestRunWithRetry:
         mock_conn = MagicMock()
         mock_conn.is_closed.return_value = False
         # First call raises retryable SSHError, second succeeds
-        mock_conn.run = AsyncMock(side_effect=[
-            SSHError("transient", retryable=True),
-            mock_result,
-        ])
+        mock_conn.run = AsyncMock(
+            side_effect=[
+                SSHError("transient", retryable=True),
+                mock_result,
+            ]
+        )
         manager._connections["test"] = mock_conn
 
         with (

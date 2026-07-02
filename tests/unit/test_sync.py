@@ -26,7 +26,9 @@ class TestIsGitDirty:
         assert _is_git_dirty(tmp_path) is True
 
     def test_git_not_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: MagicMock(returncode=0, stdout=b""))
+        monkeypatch.setattr(
+            "subprocess.run", lambda *args, **kwargs: MagicMock(returncode=0, stdout=b"")
+        )
         # But actually if git is not found, FileNotFoundError is raised
         monkeypatch.setattr(
             "subprocess.run",
@@ -38,7 +40,9 @@ class TestIsGitDirty:
 class TestSyncToRemote:
     """Tests for sync_to_remote."""
 
-    async def test_rsync_command_construction(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_rsync_command_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         profile = Profile(name="test", hostname="hpc", username="user", key_file="~/.ssh/id_rsa")
         local_dir = tmp_path / "src"
         local_dir.mkdir()
@@ -46,7 +50,9 @@ class TestSyncToRemote:
 
         recorded_cmd: list[str] | None = None
 
-        def fake_subprocess_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        def fake_subprocess_run(
+            cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
             nonlocal recorded_cmd
             if cmd[0] == "rsync":
                 recorded_cmd = cmd
@@ -78,7 +84,9 @@ class TestSyncToRemote:
         local_dir = tmp_path / "src"
         local_dir.mkdir()
 
-        def fake_subprocess_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        def fake_subprocess_run(
+            cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
             raise subprocess.TimeoutExpired(cmd, timeout=300)
 
         monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
@@ -96,8 +104,12 @@ class TestSyncToRemote:
         local_dir = tmp_path / "src"
         local_dir.mkdir()
 
-        def fake_subprocess_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-            return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="permission denied")
+        def fake_subprocess_run(
+            cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                cmd, returncode=1, stdout="", stderr="permission denied"
+            )
 
         monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
@@ -118,7 +130,9 @@ class TestSyncToRemote:
 
         real_subprocess_run = subprocess.run
 
-        def fake_subprocess_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        def fake_subprocess_run(
+            cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
             if cmd[0] == "rsync":
                 return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
             return real_subprocess_run(cmd, **kwargs)

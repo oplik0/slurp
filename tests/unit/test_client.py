@@ -51,9 +51,7 @@ def mock_ssh() -> MagicMock:
 
 
 @pytest.fixture
-def client(
-    profile: Profile, mock_ssh: MagicMock, tmp_path: Path
-) -> SyncClient:
+def client(profile: Profile, mock_ssh: MagicMock, tmp_path: Path) -> SyncClient:
     """A SyncClient with mocked SSH and a tmp-path store."""
     store_path = tmp_path / "jobs.json"
     offset_path = tmp_path / "log_offsets.json"
@@ -91,9 +89,7 @@ def _make_record(
 class TestReconcileStore:
     """Tests for SLURM reconciliation of non-terminal jobs."""
 
-    def test_updates_non_terminal_jobs(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_updates_non_terminal_jobs(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Non-terminal jobs should be queried via sacct and store updated."""
         client._store.append_job(_make_record("100", JobStatus.PENDING))
         client._store.append_job(_make_record("200", JobStatus.RUNNING))
@@ -119,9 +115,7 @@ class TestReconcileStore:
         assert stored is not None
         assert stored.status == JobStatus.RUNNING
 
-    def test_does_not_query_terminal_jobs(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_does_not_query_terminal_jobs(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Terminal jobs should not be included in the sacct query."""
         client._store.append_job(_make_record("100", JobStatus.COMPLETED))
         client._store.append_job(_make_record("200", JobStatus.FAILED))
@@ -137,9 +131,7 @@ class TestReconcileStore:
 
         assert captured_ids == []
 
-    def test_falls_back_on_ssh_failure(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_falls_back_on_ssh_failure(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """If sacct query fails, local cache is returned unchanged."""
         client._store.append_job(_make_record("100", JobStatus.PENDING))
 
@@ -149,9 +141,7 @@ class TestReconcileStore:
         # Local cache returned as-is
         assert records["100"].status == JobStatus.PENDING
 
-    def test_empty_store_returns_empty(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_empty_store_returns_empty(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         records = client._reconcile_store()
         assert records == {}
 
@@ -162,9 +152,7 @@ class TestReconcileStore:
 class TestListJobsReconciliation:
     """Verify list_jobs reconciles before returning."""
 
-    def test_list_jobs_refreshes_statuses(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_list_jobs_refreshes_statuses(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         client._store.append_job(_make_record("100", JobStatus.PENDING))
 
         def fake_sacct(profile, job_ids, *, ssh_manager):
@@ -178,15 +166,9 @@ class TestListJobsReconciliation:
         assert len(jobs) == 1
         assert jobs[0].status == JobStatus.RUNNING
 
-    def test_list_jobs_filters_by_experiment(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
-        client._store.append_job(
-            _make_record("100", JobStatus.PENDING, experiment="exp-a")
-        )
-        client._store.append_job(
-            _make_record("200", JobStatus.PENDING, experiment="exp-b")
-        )
+    def test_list_jobs_filters_by_experiment(self, client: SyncClient, mock_ssh: MagicMock) -> None:
+        client._store.append_job(_make_record("100", JobStatus.PENDING, experiment="exp-a"))
+        client._store.append_job(_make_record("200", JobStatus.PENDING, experiment="exp-b"))
 
         with patch("slurp.client.sacct_query", return_value={}):
             jobs = client.list_jobs(experiment="exp-a")
@@ -201,9 +183,7 @@ class TestListJobsReconciliation:
 class TestStatusRefresh:
     """Verify status() refreshes from SLURM when job is in local store."""
 
-    def test_status_refreshes_from_slurm(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_status_refreshes_from_slurm(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         client._store.append_job(_make_record("100", JobStatus.PENDING))
 
         def fake_sacct(profile, job_ids, *, ssh_manager):
@@ -221,9 +201,7 @@ class TestStatusRefresh:
         assert stored is not None
         assert stored.status == JobStatus.RUNNING
 
-    def test_status_not_found(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_status_not_found(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         mock_ssh.run.return_value = (0, "", "")
 
         with patch("slurp.client.sacct_query", return_value={}):
@@ -263,9 +241,7 @@ class TestJobResultCache:
 
         assert result is cached
 
-    def test_calls_wait_job_when_cache_empty(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_calls_wait_job_when_cache_empty(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         job = Job(
             job_id="100",
             name="train",
@@ -341,9 +317,7 @@ class TestSyncVenv:
         )
 
     @pytest.fixture
-    def venv_client(
-        self, venv_profile: Profile, mock_ssh: MagicMock, tmp_path: Path
-    ) -> SyncClient:
+    def venv_client(self, venv_profile: Profile, mock_ssh: MagicMock, tmp_path: Path) -> SyncClient:
         store_path = tmp_path / "jobs.json"
         offset_path = tmp_path / "log_offsets.json"
         with (
@@ -359,9 +333,7 @@ class TestSyncVenv:
         # No SSH calls should have been made
         client._ssh.run.assert_not_called()
 
-    def test_noop_when_no_lockfile(
-        self, venv_client: SyncClient, tmp_path: Path
-    ) -> None:
+    def test_noop_when_no_lockfile(self, venv_client: SyncClient, tmp_path: Path) -> None:
         """Without a local uv.lock, venv sync should skip."""
         # chdir to tmp_path (no uv.lock there)
         import os
@@ -517,9 +489,7 @@ class TestSacctLookup:
     resolves, so we retry with it and prefer the specific task row.
     """
 
-    def test_direct_hit_returns_immediately(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_direct_hit_returns_immediately(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Non-array job ID found on first sacct query."""
 
         def fake_sacct(profile, job_ids, *, ssh_manager):
@@ -533,9 +503,7 @@ class TestSacctLookup:
         assert info is not None
         assert info.status == JobStatus.RUNNING
 
-    def test_array_task_falls_back_to_parent(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_array_task_falls_back_to_parent(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Array task ID misses sacct → parent query returns the task row."""
 
         def fake_sacct(profile, job_ids, *, ssh_manager):
@@ -565,9 +533,7 @@ class TestSacctLookup:
                 return {}
             if job_ids == ["15395489"]:
                 return {
-                    "15395489": SlurmJobInfo(
-                        job_id="15395489", state="COMPLETED", exit_code="0:0"
-                    ),
+                    "15395489": SlurmJobInfo(job_id="15395489", state="COMPLETED", exit_code="0:0"),
                 }
             return {}
 
@@ -587,9 +553,7 @@ class TestSacctLookup:
                 return {}  # direct miss
             if job_ids == ["15395489"]:
                 return {
-                    "15395489": SlurmJobInfo(
-                        job_id="15395489", state="COMPLETED", exit_code="0:0"
-                    ),
+                    "15395489": SlurmJobInfo(job_id="15395489", state="COMPLETED", exit_code="0:0"),
                     "15395489_5": SlurmJobInfo(
                         job_id="15395489_5", state="FAILED", exit_code="1:0"
                     ),
@@ -603,9 +567,7 @@ class TestSacctLookup:
         assert info.status == JobStatus.FAILED
         assert info.exit_code_int == 1
 
-    def test_returns_none_when_both_miss(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_returns_none_when_both_miss(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Neither task ID nor parent resolves → None."""
 
         def fake_sacct(profile, job_ids, *, ssh_manager):
@@ -616,9 +578,7 @@ class TestSacctLookup:
 
         assert info is None
 
-    def test_non_array_id_no_parent_retry(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_non_array_id_no_parent_retry(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Non-array job ID (no underscore) should not trigger parent retry."""
 
         call_count = 0
@@ -645,9 +605,7 @@ class TestRefreshJobSqueueFallback:
     IDs on clusters where sacct can't resolve <parent>_<task>.
     """
 
-    def test_squeue_fallback_updates_status(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_squeue_fallback_updates_status(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """sacct misses → squeue finds the job → status updated."""
         job = Job(
             job_id="15395489_5",
@@ -670,9 +628,7 @@ class TestRefreshJobSqueueFallback:
 
         assert refreshed.status == JobStatus.RUNNING
 
-    def test_both_miss_returns_unchanged(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_both_miss_returns_unchanged(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Neither sacct nor squeue finds the job → return unchanged."""
         job = Job(
             job_id="99999",
@@ -690,9 +646,7 @@ class TestRefreshJobSqueueFallback:
         assert refreshed.status == JobStatus.RUNNING
         assert refreshed is job  # same object, unchanged
 
-    def test_sacct_hit_skips_squeue(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_sacct_hit_skips_squeue(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """sacct finds the job → squeue should not be queried."""
         job = Job(
             job_id="100",
@@ -757,9 +711,7 @@ class TestStatusFromSqueueUserDefault:
     potentially thousands of lines on a shared HPC system.
     """
 
-    def test_uses_username_when_set(
-        self, client: SyncClient, mock_ssh: MagicMock
-    ) -> None:
+    def test_uses_username_when_set(self, client: SyncClient, mock_ssh: MagicMock) -> None:
         """Profile with username → squeue called with that username."""
         captured_user: list = []
 
@@ -772,9 +724,7 @@ class TestStatusFromSqueueUserDefault:
 
         assert captured_user == ["user"]
 
-    def test_defaults_to_dollar_user_when_unset(
-        self, mock_ssh: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_defaults_to_dollar_user_when_unset(self, mock_ssh: MagicMock, tmp_path: Path) -> None:
         """Profile without username → squeue called with $USER literal."""
         no_user_profile = Profile(
             name="test",

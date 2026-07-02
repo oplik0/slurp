@@ -141,9 +141,7 @@ class Profile(BaseModel):
         """
         if not self.sync:
             return ""
-        return self.sync.remote.format(
-            account=self.account or "", username=self.username or ""
-        )
+        return self.sync.remote.format(account=self.account or "", username=self.username or "")
 
 
 class Job(BaseModel):

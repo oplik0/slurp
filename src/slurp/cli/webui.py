@@ -69,4 +69,3 @@ def webui_cmd(
     except Exception as exc:
         console.print(f"[bold red]Error:[/bold red] Server failed: {exc}")
         sys.exit(1)
-

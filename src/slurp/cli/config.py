@@ -36,7 +36,9 @@ def add_profile_cmd(
     if CONFIG_FILE.exists() and not force:
         content = CONFIG_FILE.read_text()
         if f"[profiles.{name}]" in content:
-            console.print(f"[yellow]Profile '{name}' already exists. Use --force to overwrite.[/yellow]")
+            console.print(
+                f"[yellow]Profile '{name}' already exists. Use --force to overwrite.[/yellow]"
+            )
             raise typer.Exit(10)
 
     # Interactive fallback

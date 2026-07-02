@@ -145,9 +145,7 @@ class TestStreamSSE:
 
     def test_stream_with_token(self, client: TestClient) -> None:
         """SSE stream should yield at least a heartbeat event."""
-        with client.stream(
-            "get", f"/stream?token={STREAM_TOKEN}&max_events=3"
-        ) as response:
+        with client.stream("get", f"/stream?token={STREAM_TOKEN}&max_events=3") as response:
             assert response.status_code == 200
             assert "text/event-stream" in response.headers["content-type"]
             # Read a few lines to verify SSE format

@@ -30,13 +30,17 @@ class TestCheck:
 
     def test_raises_inside_slurm(self) -> None:
         """check() should raise RuntimeError when SLURM_JOB_ID is set."""
-        with patch.dict(os.environ, {"SLURM_JOB_ID": "999"}), pytest.raises(
-            RuntimeError, match="Recursive distribution"
+        with (
+            patch.dict(os.environ, {"SLURM_JOB_ID": "999"}),
+            pytest.raises(RuntimeError, match="Recursive distribution"),
         ):
             guard.check()
 
     def test_raises_with_job_id_in_message(self) -> None:
-        with patch.dict(os.environ, {"SLURM_JOB_ID": "42"}), pytest.raises(RuntimeError, match="42"):
+        with (
+            patch.dict(os.environ, {"SLURM_JOB_ID": "42"}),
+            pytest.raises(RuntimeError, match="42"),
+        ):
             guard.check()
 
 

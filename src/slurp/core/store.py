@@ -90,9 +90,7 @@ class JobStore:
         fd = self._acquire_lock()
         try:
             data = self.read()
-            data["jobs"] = {
-                jid: record.model_dump(mode="json") for jid, record in jobs.items()
-            }
+            data["jobs"] = {jid: record.model_dump(mode="json") for jid, record in jobs.items()}
             self._atomic_write(data)
         finally:
             self._release_lock(fd)
@@ -135,10 +133,7 @@ class JobStore:
     def list_jobs(self) -> dict[str, JobRecord]:
         """Return all job records."""
         data = self.read()
-        return {
-            jid: JobRecord.model_validate(raw)
-            for jid, raw in data.get("jobs", {}).items()
-        }
+        return {jid: JobRecord.model_validate(raw) for jid, raw in data.get("jobs", {}).items()}
 
     def check_idempotency(self, hash_key: str, window_seconds: float = 30.0) -> str | None:
         """Return job_id if a matching hash exists within the window."""
@@ -218,7 +213,5 @@ class LogOffsetStore:
         offsets = self.read()
         from datetime import datetime
 
-        offsets[job_id] = LogOffsetRecord(
-            out=out, err=err, last_read=datetime.now(UTC)
-        )
+        offsets[job_id] = LogOffsetRecord(out=out, err=err, last_read=datetime.now(UTC))
         self.write(offsets)

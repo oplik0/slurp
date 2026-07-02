@@ -184,12 +184,9 @@ async def sbatch_submit(
 
     # Write script to remote temp file
     import random
+
     remote_script = f"{working_dir}/.slurm_script_{random.randint(0, 999999)}.sh"
-    heredoc_cmd = (
-        f"mkdir -p {working_dir} && cat > '{remote_script}' << 'EOF'\n"
-        f"{script}\n"
-        "EOF"
-    )
+    heredoc_cmd = f"mkdir -p {working_dir} && cat > '{remote_script}' << 'EOF'\n{script}\nEOF"
     await ssh_manager.run(
         profile,
         heredoc_cmd,
@@ -241,11 +238,7 @@ async def sacct_query(
         return {}
 
     id_str = ",".join(job_ids)
-    cmd = (
-        f"sacct -j {id_str} "
-        "--format=JobID,State,ExitCode,MaxRSS,Elapsed "
-        "--noheader --parsable2"
-    )
+    cmd = f"sacct -j {id_str} --format=JobID,State,ExitCode,MaxRSS,Elapsed --noheader --parsable2"
     try:
         _, stdout, stderr = await ssh_manager.run(profile, cmd, timeout=30.0)
     except Exception as exc:
@@ -343,7 +336,9 @@ async def scancel(
         )
 
 
-def log_path(job_id: str, job_name: str, working_dir: str, task_id: int | None = None) -> tuple[str, str]:
+def log_path(
+    job_id: str, job_name: str, working_dir: str, task_id: int | None = None
+) -> tuple[str, str]:
     """Return (out_path, err_path) for a job."""
     suffix = f"_{task_id}" if task_id is not None else ""
     jid = f"{job_id}{suffix}"
@@ -367,15 +362,13 @@ def build_torchrun_command(
     cpu_bind = profile.cpu_bind or "cores"
 
     env_lines = [
-        'export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)',
+        "export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)",
         "export MASTER_PORT=29500",
         "export OMP_NUM_THREADS=1",
     ]
     if nodes > 1:
         env_lines.append("export NCCL_DEBUG=INFO")
-        env_lines.append(
-            "export NCCL_DEBUG_FILE=$PROJECT/.slurp/nccl_logs/$SLURM_JOB_ID-%h.log"
-        )
+        env_lines.append("export NCCL_DEBUG_FILE=$PROJECT/.slurp/nccl_logs/$SLURM_JOB_ID-%h.log")
 
     srun_line = (
         f"srun --mpi={mpi} --cpu-bind={cpu_bind} --distribution=block:cyclic "

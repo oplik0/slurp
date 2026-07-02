@@ -184,9 +184,7 @@ class TestSubmit:
             ]
             mock_cfg.exists.return_value = False
             mock_cfg.write_text = MagicMock()
-            result = runner.invoke(
-                app, ["submit", "python", "train.py"], input="y\n"
-            )
+            result = runner.invoke(app, ["submit", "python", "train.py"], input="y\n")
             # The interactive path may not fully execute in headless runner,
             # but we verify it doesn't crash with an unhandled error.
             assert result.exit_code in (0, 1, 10)
@@ -195,9 +193,7 @@ class TestSubmit:
 class TestSubmitArray:
     def test_submit_array_with_sweep_params(self, mock_client: MagicMock) -> None:
         """submit-array should parse trailing --key v1,v2,... as sweep configs."""
-        mock_client.submit_array.return_value = MagicMock(
-            array_job_id="12345_0", task_count=3
-        )
+        mock_client.submit_array.return_value = MagicMock(array_job_id="12345_0", task_count=3)
         result = runner.invoke(
             app,
             [
@@ -266,11 +262,8 @@ class TestCancel:
         assert result.exit_code == 0
         assert mock_client.cancel_job.call_count == 2
 
-
     def test_submit_array_with_resource_flags(self, mock_client: MagicMock) -> None:
-        mock_client.submit_array.return_value = MagicMock(
-            array_job_id="12345_0", task_count=3
-        )
+        mock_client.submit_array.return_value = MagicMock(array_job_id="12345_0", task_count=3)
         result = runner.invoke(
             app,
             [
@@ -337,9 +330,7 @@ class TestPull:
 class TestConfig:
     @patch("slurp.cli.config.CONFIG_FILE")
     @patch("slurp.cli.config._ensure_config_dir")
-    def test_add_profile_non_interactive(
-        self, mock_ensure: MagicMock, mock_cfg: MagicMock
-    ) -> None:
+    def test_add_profile_non_interactive(self, mock_ensure: MagicMock, mock_cfg: MagicMock) -> None:
         mock_cfg.exists.return_value = False
         mock_cfg.write_text = MagicMock()
         result = runner.invoke(
@@ -484,7 +475,13 @@ class TestSetup:
         config_dir = tmp_path / "slurp"
         config_file = config_dir / "profiles.toml"
         answers = [
-            "default", "h", "u", "", "", "", "",
+            "default",
+            "h",
+            "u",
+            "",
+            "",
+            "",
+            "",
             False,  # advanced
             False,  # sync (skip)
             True,  # venv
@@ -518,7 +515,9 @@ class TestSetup:
             "gpu",  # partition
             "acct",  # account
             False,  # advanced
-            True, ".", "/home/alice/p",  # sync
+            True,
+            ".",
+            "/home/alice/p",  # sync
             False,  # venv
             True,  # write
         ]
@@ -555,7 +554,13 @@ class TestSetup:
         config_dir = tmp_path / "slurp"
         config_file = config_dir / "profiles.toml"
         answers = [
-            "default", "h", "u", "", "", "", "",
+            "default",
+            "h",
+            "u",
+            "",
+            "",
+            "",
+            "",
             False,  # advanced
             False,  # sync
             False,  # venv

@@ -306,8 +306,9 @@ class TestGuardIntegration:
         def f(x: int) -> None:
             pass
 
-        with patch.dict(os.environ, {"SLURM_JOB_ID": "123"}), pytest.raises(
-            RuntimeError, match="Recursive distribution"
+        with (
+            patch.dict(os.environ, {"SLURM_JOB_ID": "123"}),
+            pytest.raises(RuntimeError, match="Recursive distribution"),
         ):
             f.distribute(x=1)
 
@@ -318,8 +319,9 @@ class TestGuardIntegration:
         def f(x: int) -> int:
             return x
 
-        with patch.dict(os.environ, {"SLURM_JOB_ID": "456"}), pytest.raises(
-            RuntimeError, match="Recursive distribution"
+        with (
+            patch.dict(os.environ, {"SLURM_JOB_ID": "456"}),
+            pytest.raises(RuntimeError, match="Recursive distribution"),
         ):
             f.remote(x=1)
 

@@ -181,18 +181,12 @@ def _prompt_answers() -> dict[str, Any]:
     answers["key_file"] = _ask(
         questionary.text("SSH private key path (optional, e.g. ~/.ssh/id_ed25519):")
     )
-    answers["proxy_jump"] = _ask(
-        questionary.text("Bastion / proxy jump host (optional):")
-    )
+    answers["proxy_jump"] = _ask(questionary.text("Bastion / proxy jump host (optional):"))
 
     # --- SLURM defaults ------------------------------------------------
     console.rule("[bold]SLURM defaults[/bold]")
-    answers["partition"] = _ask(
-        questionary.text("Default partition (optional):")
-    )
-    answers["account"] = _ask(
-        questionary.text("Default account (optional):")
-    )
+    answers["partition"] = _ask(questionary.text("Default partition (optional):"))
+    answers["account"] = _ask(questionary.text("Default account (optional):"))
 
     # --- advanced tuning ----------------------------------------------
     if _ask(
@@ -203,8 +197,7 @@ def _prompt_answers() -> dict[str, Any]:
     ):
         answers["prologue"] = _ask(
             questionary.text(
-                "Prologue shell commands "
-                "(optional, e.g. 'module load Python; module load CUDA'):"
+                "Prologue shell commands (optional, e.g. 'module load Python; module load CUDA'):"
             )
         )
         answers["mpi_mode"] = _ask(
@@ -230,27 +223,18 @@ def _prompt_answers() -> dict[str, Any]:
         )
 
     # --- code sync -----------------------------------------------------
-    if _ask(
-        questionary.confirm("Configure code sync (rsync local -> remote)?", default=True)
-    ):
+    if _ask(questionary.confirm("Configure code sync (rsync local -> remote)?", default=True)):
         answers["sync"] = True
-        answers["sync_local"] = _ask(
-            questionary.text("Local path to sync from:", default=".")
-        )
+        answers["sync_local"] = _ask(questionary.text("Local path to sync from:", default="."))
         answers["sync_remote"] = _ask(
             questionary.text(
-                "Remote path to sync to "
-                "({username}/{account} are auto-substituted):",
+                "Remote path to sync to ({username}/{account} are auto-substituted):",
                 validate=_required,
             )
         )
 
     # --- remote venv ---------------------------------------------------
-    if _ask(
-        questionary.confirm(
-            "Configure remote venv management (uv-sync)?", default=False
-        )
-    ):
+    if _ask(questionary.confirm("Configure remote venv management (uv-sync)?", default=False)):
         answers["venv"] = True
         answers["venv_path"] = _ask(
             questionary.text("Remote venv path:", default=_DEFAULT_VENV_PATH)
@@ -260,9 +244,7 @@ def _prompt_answers() -> dict[str, Any]:
         )
         if not answers["venv_all_extras"]:
             answers["venv_extras"] = _ask(
-                questionary.text(
-                    "Specific extras (comma-separated, e.g. cu121,dev):"
-                )
+                questionary.text("Specific extras (comma-separated, e.g. cu121,dev):")
             )
 
     return answers
@@ -279,9 +261,7 @@ def _backup_existing() -> Path | None:
         return None
 
     console.print(f"[yellow]Found existing config: {CONFIG_FILE}[/yellow]")
-    if not _ask(
-        questionary.confirm("Back it up and overwrite?", default=False)
-    ):
+    if not _ask(questionary.confirm("Back it up and overwrite?", default=False)):
         console.print("[yellow]Setup aborted — existing config left untouched.[/yellow]")
         raise typer.Exit(0)
 
