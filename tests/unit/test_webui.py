@@ -11,10 +11,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# These tests need the optional `web` extra (fastapi/uvicorn). Skip the whole
-# module gracefully when it isn't installed instead of failing at collection.
+# These tests need the optional `web` extra (fastapi/uvicorn) plus httpx2 for
+# starlette's TestClient. Skip the whole module gracefully when any of them are
+# missing instead of failing at collection.
 pytest.importorskip("fastapi")
 pytest.importorskip("uvicorn")
+pytest.importorskip("httpx2")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from slurp.domain import Job, JobStatus, ResourceRequest

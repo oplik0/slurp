@@ -72,6 +72,10 @@ dev = [
     "ruff",
     "pre-commit",
     "pytest-cov>=7.1.0",
+    # Required by starlette.testclient.TestClient, used by tests/unit/test_webui.py.
+    # Starlette 1.2.0 deprecates httpx in favor of httpx2; using the legacy
+    # package works but emits a deprecation warning on every test run.
+    "httpx2>=2.5",
 ]
 
 [tool.ruff]
