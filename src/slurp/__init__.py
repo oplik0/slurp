@@ -6,6 +6,15 @@ Public API:
     slurp.Experiment(name) -> experiment helper
     slurp.log_progress(...) -> write progress.jsonl
 
+Task API (decorator-based, Ray/slurminade-style):
+    @slurp.task(gpus=4)         — decorator
+    func.distribute(args)      — fire-and-forget submit
+    func.remote(args)          — submit, return Ref
+    slurp.get(ref)             — block, return deserialized result
+    slurp.join()               — wait for all pending .distribute() calls
+    slurp.put(obj)             — share object across tasks
+    slurp.JobBundling(n)       — batch calls into job arrays
+
 Exception classes:
     slurp.SlurpError
     slurp.SSHError
@@ -20,7 +29,18 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from slurp import guard  # noqa: E402  (submodule for slurp.guard.disabled etc.)
 from slurp.client import SyncClient
+
+# Task API
+from slurp.dispatcher import (
+    JobBundling,
+    LocalDispatcher,
+    ObjectRef,
+    Ref,
+    get_dispatcher,
+    set_dispatcher,
+)
 from slurp.domain import (
     ArrayJob,
     Job,
@@ -36,12 +56,29 @@ from slurp.errors import (
     SSHError,
     SyncError,
 )
+from slurp.node_setup import node_setup
+from slurp.task import get, join, put, task
 
 __all__ = [
+    # Low-level API
     "submit",
     "submit_array",
     "Experiment",
     "log_progress",
+    "SyncClient",
+    # Task API
+    "task",
+    "get",
+    "join",
+    "put",
+    "Ref",
+    "ObjectRef",
+    "JobBundling",
+    "LocalDispatcher",
+    "get_dispatcher",
+    "set_dispatcher",
+    "node_setup",
+    "guard",
     # Types
     "Job",
     "JobResult",

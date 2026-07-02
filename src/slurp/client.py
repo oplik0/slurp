@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import sys
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from slurp.core.slurm import (
     sacct_query,
     sbatch_submit,
     scancel,
+    squeue_query,
 )
 from slurp.core.ssh import SSHManager
 from slurp.core.store import JobStore, LogOffsetStore
@@ -33,6 +35,7 @@ from slurp.domain import (
     JobStatus,
     Profile,
     ResourceRequest,
+    SlurmJobInfo,
     slugify_command,
 )
 from slurp.errors import (
@@ -125,6 +128,21 @@ class SyncClient:
         self._ssh = SSHManager()
         self._store = JobStore()
         self._offset_store = LogOffsetStore()
+        # Persistent background event loop. A cached asyncssh connection is
+        # bound to the loop that created it; if we used asyncio.run() per
+        # _run() call (fresh loop each time), the second call would reuse a
+        # connection attached to a now-dead loop and raise
+        # "Future attached to a different loop" -- which the sacct/squeue
+        # wrappers swallow, manifesting as wait_job() timeouts.
+        self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._run_background_loop, name="slurp-asyncio", daemon=True
+        )
+        self._thread.start()
+
+    def _run_background_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
 
     def __enter__(self) -> SyncClient:
         return self
@@ -133,21 +151,150 @@ class SyncClient:
         self.close()
 
     def close(self) -> None:
-        """Close the SSH connection for this profile."""
+        """Close SSH connections and tear down the background loop."""
+        if not self._loop.is_running():
+            return
+        # Close connections on their own loop (thread-safe context).
+        try:
+            asyncio.run_coroutine_threadsafe(self._shutdown_async(), self._loop).result(
+                timeout=5.0
+            )
+        except Exception:
+            pass
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=5.0)
+
+    async def _shutdown_async(self) -> None:
+        """Close cached SSH connections and the loop's default executor.
+
+        asyncssh offloads blocking I/O (DNS resolution, key loading) to the
+        loop's default ThreadPoolExecutor. Stopping the loop alone leaves those
+        worker threads alive -- one per SyncClient -- so they must be drained
+        explicitly or long-running processes accumulate threads.
+        """
         self._ssh.close(profile=self.profile)
+        try:
+            await asyncio.wait_for(self._loop.shutdown_default_executor(), timeout=2.0)
+        except (TimeoutError, NotImplementedError, RuntimeError):
+            pass
 
     def _run(self, coro: Any) -> Any:
-        """Run an async coroutine from sync code, handling Jupyter loops."""
+        """Run an async coroutine from sync code on the persistent loop.
+
+        Falls back to a fresh asyncio.run() in a worker thread when called
+        from inside a running event loop (e.g. Jupyter), because blocking the
+        caller's loop with future.result() would deadlock.
+        """
         try:
             asyncio.get_running_loop()
+            in_loop = True
         except RuntimeError:
-            return asyncio.run(coro)
-        # We are inside an existing event loop (e.g., Jupyter)
-        import concurrent.futures
+            in_loop = False
 
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, coro)
-            return future.result()
+        if in_loop:
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, coro).result()
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
+
+    def _sync_venv(self, remote_dir: str) -> None:
+        """Ensure the remote venv is up-to-date via ``uv sync``.
+
+        Runs on the login node (which has network access) after rsync
+        but before sbatch.  The venv is cached on the remote and only
+        rebuilt when ``uv.lock`` changes.
+
+        No-op when ``profile.venv`` is None or ``uv.lock`` is absent
+        from the working directory.
+        """
+        venv = self.profile.venv
+        if venv is None:
+            return
+
+        # Check locally — rsync just ran (or will run), so if uv.lock
+        # exists in the sync source it exists on the remote. Use the profile's
+        # sync.local dir (not cwd) so this works when the driver script runs
+        # from a subdir (e.g. examples/) but uv.lock lives at the repo root.
+        local_dir = (
+            Path(self.profile.sync.local)
+            if self.profile.sync and self.profile.sync.local
+            else Path.cwd()
+        )
+        local_lockfile = local_dir / "uv.lock"
+        if not local_lockfile.exists():
+            logger.debug("venv_sync_skipped", reason="no uv.lock in working dir")
+            return
+
+        if venv.strategy != "uv-sync":
+            logger.warning(
+                "venv_sync_skipped",
+                strategy=venv.strategy,
+                reason="unknown strategy",
+            )
+            return
+
+        venv_path = venv.path
+        if venv.all_extras:
+            extras_args = "--all-extras"
+        else:
+            extras_args = " ".join(f"--extra {e}" for e in venv.extras)
+
+        # Pin the remote venv's Python to the LOCAL interpreter's major.minor.
+        # cloudpickle serializes function code objects with version-specific
+        # CPython internals; a payload pickled on 3.11 and unpickled on 3.14
+        # segfaults. The driver and the workers MUST share a Python version.
+        import sys
+
+        python_pin = f"--python {sys.version_info[0]}.{sys.version_info[1]}"
+
+        # Hash-check + conditional rebuild in one SSH call.
+        # If the lockfile hash matches the marker, this is a no-op.
+        #
+        # uv's cache and managed-Python downloads can be large (~100MB); on
+        # clusters with tight HOME quotas (JURECA: ~GBs) they fail mid-extract
+        # with "Disk quota exceeded". Prefer the project scratch filesystem
+        # (/p/scratch/<account>/<user>) when the account is set, falling back
+        # to $HOME. The venv's bin/python symlinks to the managed install, so
+        # compute nodes see it via the shared filesystem.
+        account = self.profile.account or ""
+        username = self.profile.username or ""
+        uv_base = (
+            f"/p/scratch/{account}/{username}/.uv" if account and username else '"$HOME/.uv"'
+        )
+        cmd = (
+            f"cd {remote_dir} && "
+            f"mkdir -p {uv_base}/cache {uv_base}/python && "
+            f"export UV_CACHE_DIR={uv_base}/cache && "
+            f"export UV_PYTHON_INSTALL_DIR={uv_base}/python && "
+            f'NEW_HASH=$(sha256sum uv.lock 2>/dev/null | cut -d" " -f1) && '
+            f'OLD_HASH=$(cat {venv_path}/.lockhash 2>/dev/null || echo "") && '
+            f'if [ "$NEW_HASH" != "$OLD_HASH" ]; then '
+            f'UV_PROJECT_ENVIRONMENT={venv_path} uv sync --frozen --no-dev {python_pin} {extras_args} && '
+            f'mkdir -p {venv_path} && '
+            f'echo "$NEW_HASH" > {venv_path}/.lockhash; '
+            f"fi"
+        )
+
+        logger.info("venv_sync_start", venv_path=venv_path, remote_dir=remote_dir)
+        exit_code, _, stderr = self._run(
+            self._ssh.run(self.profile, cmd, check=False, timeout=600.0)
+        )
+
+        if exit_code != 0:
+            stderr_str = stderr.strip() if stderr else ""
+            if "command not found" in stderr_str or "uv: not found" in stderr_str:
+                raise SyncError(
+                    "uv not found on remote login node.",
+                    hint="Install uv on the remote: pip install uv",
+                )
+            raise SyncError(
+                f"venv sync failed (exit {exit_code}): {stderr_str}",
+                hint="Check uv.lock is valid and the remote has network access.",
+            )
+
+        logger.info("venv_sync_complete", venv_path=venv_path)
 
     def submit(
         self,
@@ -193,7 +340,7 @@ class SyncClient:
         remote_dir = working_dir or str(local_dir)
 
         if profile.sync and profile.sync.remote:
-            remote_dir = profile.sync.remote
+            remote_dir = profile.format_remote()
             if profile.sync.local:
                 local_dir = Path(profile.sync.local)
 
@@ -209,6 +356,9 @@ class SyncClient:
         # Sync
         if sync:
             self._run(sync_to_remote(profile, local_dir, remote_dir, ssh_manager=self._ssh))
+
+        # Venv sync (login node, after rsync)
+        self._sync_venv(remote_dir)
 
         # Build command
         job_name = resources.job_name or slugify_command(command)
@@ -307,12 +457,15 @@ class SyncClient:
         local_dir = Path.cwd()
         remote_dir = working_dir
         if profile.sync and profile.sync.remote:
-            remote_dir = profile.sync.remote
+            remote_dir = profile.format_remote()
             if profile.sync.local:
                 local_dir = Path(profile.sync.local)
 
         if sync:
             self._run(sync_to_remote(profile, local_dir, remote_dir, ssh_manager=self._ssh))
+
+        # Venv sync (login node, after rsync)
+        self._sync_venv(remote_dir)
 
         script = generate_array_wrapper(
             resources=resources,
@@ -359,15 +512,54 @@ class SyncClient:
         logger.info("Array job submitted", array_job_id=job_id, tasks=len(configs))
         return array
 
+    def _sacct_lookup(self, job_id: str) -> SlurmJobInfo | None:
+        """Query sacct for a single job, with array-parent fallback.
+
+        On clusters that collapse uniform job arrays into a single sacct
+        row (JURECA), ``sacct -j <parent>_<task>`` returns nothing while
+        ``sacct -j <parent>`` succeeds.  When the direct lookup misses and
+        *job_id* looks like an array task (``parent_task``), retry with
+        the parent ID and prefer the specific task row if present.
+        """
+        info: dict[str, SlurmJobInfo] = self._run(
+            sacct_query(self.profile, [job_id], ssh_manager=self._ssh)
+        )
+        if job_id in info:
+            return info[job_id]
+        # Array task ID that sacct can't resolve directly.
+        if "_" in job_id:
+            parent = job_id.rsplit("_", 1)[0]
+            parent_info: dict[str, SlurmJobInfo] = self._run(
+                sacct_query(self.profile, [parent], ssh_manager=self._ssh)
+            )
+            if job_id in parent_info:
+                return parent_info[job_id]
+            if parent in parent_info:
+                return parent_info[parent]
+        return None
+
     def refresh_job(self, job: Job) -> Job:
-        """Refresh a job's status from SLURM."""
-        info = self._run(sacct_query(self.profile, [job.job_id], ssh_manager=self._ssh))
-        slurm_info = info.get(job.job_id)
+        """Refresh a job's status from SLURM.
+
+        Tries sacct first (with array-parent fallback for task IDs),
+        then falls back to squeue for live state — mirroring
+        :meth:`status`.  Without the squeue fallback, ``wait_job``
+        hangs indefinitely for array task IDs on clusters where sacct
+        can't resolve ``<parent>_<task>`` (JURECA).
+        """
+        slurm_info = self._sacct_lookup(job.job_id)
         if slurm_info:
             new_status = slurm_info.status
             if new_status != job.status:
                 self._store.update_job_status(job.job_id, new_status)
             return job.model_copy(update={"status": new_status})
+        # sacct miss — fall back to squeue for live state (accounting DB
+        # lag, pending jobs, or collapsed array task IDs on JURECA).
+        squeue_job = self._status_from_squeue(job.job_id)
+        if squeue_job is not None:
+            if squeue_job.status != job.status:
+                self._store.update_job_status(job.job_id, squeue_job.status)
+            return job.model_copy(update={"status": squeue_job.status})
         return job
 
     def _reconcile_store(self) -> dict[str, JobRecord]:
@@ -449,8 +641,7 @@ class SyncClient:
             time.sleep(poll_interval)
 
         # Fetch final result
-        info = self._run(sacct_query(self.profile, [job.job_id], ssh_manager=self._ssh))
-        slurm_info = info.get(job.job_id)
+        slurm_info = self._sacct_lookup(job.job_id)
         exit_code = slurm_info.exit_code_int if slurm_info else None
         status = slurm_info.status if slurm_info else job.status
 
@@ -590,6 +781,15 @@ class SyncClient:
         self._store.update_job_status(job.job_id, JobStatus.CANCELLED)
         return job.model_copy(update={"status": JobStatus.CANCELLED})
 
+    def cancel_job_by_id(self, job_id: str) -> None:
+        """Cancel a job by ID string (no status check, best-effort).
+
+        Accepts array task IDs (``15395489_5``) as well as plain job IDs.
+        ``scancel`` itself handles already-completed or non-existent jobs
+        gracefully.
+        """
+        self._run(scancel(self.profile, job_id, ssh_manager=self._ssh))
+
     def job_result(self, job: Job) -> JobResult:
         """Idempotent accessor for job result."""
         cached = job._result_cache.get(job.job_id)
@@ -698,6 +898,45 @@ class SyncClient:
                 status=slurm_info.status,
                 profile=self.profile.name,
             )
+        # sacct misses three cases: (1) pending/just-submitted jobs (accounting
+        # DB lag — squeue sees them within ~1s, sacct takes 5s+), (2) array
+        # task IDs "<parent>_<task>" on clusters that collapse uniform arrays
+        # into one sacct row (JURECA: sacct -j 15395211_0 returns nothing; only
+        # the parent 15395211 resolves). Fall back to squeue, which is live.
+        return self._status_from_squeue(job_id)
+
+    def _status_from_squeue(self, job_id: str) -> Job | None:
+        """Look up a job's live state via squeue (sacct fallback).
+
+        Returns None only if the job is in neither squeue nor sacct — i.e. it
+        genuinely doesn't exist (or is so old it aged out of both).
+        """
+        # When the profile has no explicit username (relies on SSH config
+        # for the remote user), pass $USER so squeue filters by the remote
+        # user instead of returning every job on the cluster.
+        user = self.profile.username or "$USER"
+        states = self._run(
+            squeue_query(self.profile, ssh_manager=self._ssh, user=user)
+        )
+        if not states:
+            return None
+        # Direct hit (non-array pending/running job).
+        if job_id in states:
+            return Job(
+                job_id=job_id, name="unknown", status=states[job_id],
+                profile=self.profile.name,
+            )
+        # Array task: squeue collapses to "<parent>_[0-11%20]". Match by parent
+        # prefix — if the array is still active, the task is pending/running.
+        parent = job_id.rsplit("_", 1)[0] if "_" in job_id else job_id
+        for sq_id, st in states.items():
+            if sq_id == parent or sq_id.startswith(f"{parent}_") or sq_id.startswith(
+                f"{parent}["
+            ):
+                return Job(
+                    job_id=job_id, name="unknown", status=st,
+                    profile=self.profile.name,
+                )
         return None
 
     def sync(self, local_dir: Path | None = None, remote_dir: str | None = None) -> None:
@@ -706,7 +945,7 @@ class SyncClient:
         local_dir = local_dir or Path.cwd()
         remote_dir = remote_dir or str(local_dir)
         if profile.sync and profile.sync.remote:
-            remote_dir = profile.sync.remote
+            remote_dir = profile.format_remote()
             if profile.sync.local:
                 local_dir = Path(profile.sync.local)
         self._run(sync_to_remote(profile, local_dir, remote_dir, ssh_manager=self._ssh))

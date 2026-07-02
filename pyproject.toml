@@ -23,6 +23,7 @@ classifiers = [
 
 dependencies = [
     "asyncssh>=2.14",
+    "cloudpickle>=3.0",
     "pydantic>=2.0",
     "typer>=0.9",
     "rich>=13.0",
@@ -66,6 +67,7 @@ packages = ["src/slurp"]
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-timeout>=2.3",
     "mypy",
     "ruff",
     "pre-commit",
@@ -96,6 +98,10 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "cloudpickle"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

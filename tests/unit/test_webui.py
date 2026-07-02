@@ -10,7 +10,12 @@ from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
+
+# These tests need the optional `web` extra (fastapi/uvicorn). Skip the whole
+# module gracefully when it isn't installed instead of failing at collection.
+pytest.importorskip("fastapi")
+pytest.importorskip("uvicorn")
+from fastapi.testclient import TestClient  # noqa: E402
 
 from slurp.domain import Job, JobStatus, ResourceRequest
 

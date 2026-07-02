@@ -1,20 +1,55 @@
+# Template profile for JURECA (Jülich Supercomputing Centre).
+#
+# Verified 2026-07-01 against SLURM 24.11.7 (post 2026-06-30 software update).
+# Copy to ~/.config/slurp/profiles.toml and fill in the three blanks below.
+#
+# Finding your budget account (the "account" field is NOT your username):
+#   ssh <user>@jureca.fz-juelich.de
+#   jutil user projects
+#   -> use a value from the "budget-accounts" column (a project with "-" has none)
+#
+# Partition notes:
+#   - dc-gpu-devel : fast scheduling (devel), DefaultTime 30m. Good default for
+#                    testing/development. 1-task GPU jobs see all 4 GPUs via
+#                    CUDA_VISIBLE_DEVICES regardless of --gres=gpu:N (JURECA
+#                    auto-injection quirk); export CUDA_VISIBLE_DEVICES to override.
+#   - dc-gpu       : production GPU partition; often fully allocated -> queue.
+#   - The training accounts only have associations on dc-gpu* partitions, not
+#     dc-cpu*; submitting --gpus 0 to a GPU partition makes the submit filter
+#     grab gpu:4 silently, so always pass --gpus explicitly on GPU partitions.
+#
+# Software Stage: Stages/2026 is the current default (loaded automatically);
+# Stages/2024 in older templates is stale. Load only what your job needs --
+# importing PyTorch just to run `hostname` wastes time and can fail.
+#
+# Remote working dir: $PROJECT/$SCRATCH are unset for training accounts and
+# /p/project/<account> does not exist; $HOME (/p/home/jusers/<user>/jureca) is
+# writable and a safe default. Adjust to a project scratch dir for real workloads.
+
 [profiles.jureca]
 hostname = "jureca.fz-juelich.de"
-username = ""  # fill in your Jülich account
-partition = "dc-gpu"
-account = ""   # fill in your Jülich project
-key_file = "~/.ssh/id_ed25519"
+username = ""  # your Jülich user id, e.g. blizniuk1
+partition = "dc-gpu-devel"
+account = ""   # budget account from `jutil user projects`, e.g. training2625
+key_file = "~/.ssh/judoor"
 prologue = """
-module load Stages/2024
-module load GCC
-module load CUDA
+module load Stages/2026
 module load Python
-module load PyTorch
 """
 mpi_mode = "pmi2"
 cpu_bind = "cores"
 gpu_flag_style = "gres"
 
+# Venv sync: slurp runs `uv sync` on the login node (which has network)
+# before sbatch, then the prologue activates the venv on compute nodes.
+# The venv is cached on the remote and only rebuilt when uv.lock changes.
+# Requires: uv installed on the remote (pip install uv) and uv.lock in
+# your project root.
+# [profiles.jureca.venv]
+# strategy = "uv-sync"
+# path = "$HOME/slurp-projects/.venv"
+# extras = ["cu121"]        # or all_extras = true
+
 [profiles.jureca.sync]
 local = "."
-remote = "/p/project/$account/$username/slurp-projects"
+remote = "/p/home/jusers/{username}/jureca/slurp-projects"  # {username}/{account} auto-substituted

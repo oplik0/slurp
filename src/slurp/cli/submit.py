@@ -198,13 +198,23 @@ def submit_cmd(
             from slurp.domain import ResourceRequest
 
             profile_obj = client.profile
+            # Mirror client.submit()'s remote working-dir resolution so the
+            # dry-run shows the paths a real submission would use, not the
+            # local cwd.
+            remote_dir = str(Path.cwd())
+            if profile_obj.sync and profile_obj.sync.remote:
+                remote_dir = profile_obj.format_remote()
             resources = ResourceRequest(
                 gpus=gpus,
                 nodes=nodes,
                 time=time or "2:00:00",
+                mem=mem,
                 cpus=cpus,
                 partition=partition or profile_obj.partition,
                 account=account or profile_obj.account,
+                constraint=constraint,
+                qos=qos,
+                mail_type=mail_type,
                 job_name=job_name,
                 slurm_kwargs=kwargs["slurm_kwargs"],
             )
@@ -212,7 +222,7 @@ def submit_cmd(
                 resources=resources,
                 profile=profile_obj,
                 command=cmd_str,
-                working_dir=str(Path.cwd()),
+                working_dir=remote_dir,
             )
             console.print(Syntax(script, "bash", theme="monokai"))
             return

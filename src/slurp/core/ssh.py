@@ -69,9 +69,14 @@ class SSHManager:
     async def _connect(self, profile: Profile) -> asyncssh.SSHClientConnection:
         """Create a new asyncssh connection, reading OpenSSH config."""
         options: dict[str, Any] = {
-            "config": [str(Path.home() / ".ssh" / "config")],
             "known_hosts": None,  # Allow new hosts; OpenSSH config can override
         }
+        # Only hand asyncssh a config path that exists; a missing file makes
+        # it raise FileNotFoundError, which previously surfaced as a misleading
+        # "connection timed out".
+        config_path = Path.home() / ".ssh" / "config"
+        if config_path.exists():
+            options["config"] = [str(config_path)]
         if profile.username:
             options["username"] = profile.username
         if profile.key_file:

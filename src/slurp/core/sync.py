@@ -83,6 +83,7 @@ async def sync_to_remote(
         "rsync",
         "-avz",
         "--delete",
+        "--include=._slurp/***",  # sync task payloads despite .gitignore
         "--filter=:- .gitignore",
         "-e",
         ssh_cmd,

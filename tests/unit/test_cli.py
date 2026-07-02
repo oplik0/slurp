@@ -5,7 +5,9 @@ These tests use Typer's CliRunner and mock SyncClient to avoid network calls.
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Generator
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +17,11 @@ from slurp.cli.main import app
 from slurp.domain import Job, JobStatus, ResourceRequest
 
 runner = CliRunner()
+
+# The webui command's happy-path test needs the optional `web` extra
+# (uvicorn) for @patch("uvicorn.run") to resolve. The missing-deps test
+# below deliberately runs without it.
+_WEB_AVAILABLE = importlib.util.find_spec("uvicorn") is not None
 
 
 @pytest.fixture
@@ -365,6 +372,7 @@ class TestConfig:
 
 
 class TestWebui:
+    @pytest.mark.skipif(not _WEB_AVAILABLE, reason="uvicorn (web extra) not installed")
     @patch("uvicorn.run")
     @patch("slurp.webui.create_app")
     @patch("slurp.webui.security.STREAM_TOKEN", "test-token")
@@ -389,3 +397,264 @@ class TestErrorHandling:
         mock_client.submit.side_effect = SlurmError("sbatch failed")
         result = runner.invoke(app, ["submit", "python", "train.py"])
         assert result.exit_code == 1
+
+
+class TestSetup:
+    """Tests for the `slurp setup` interactive wizard."""
+
+    def test_setup_minimal(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "slurp"
+        config_file = config_dir / "profiles.toml"
+        answers = [
+            "default",  # name
+            "cluster.example.edu",  # hostname
+            "alice",  # username
+            "~/.ssh/id_ed25519",  # key_file
+            "",  # proxy_jump
+            "gpu",  # partition
+            "lab-123",  # account
+            False,  # advanced confirm
+            True,  # sync confirm
+            ".",  # sync_local
+            "/home/alice/proj",  # sync_remote
+            False,  # venv confirm
+            True,  # write confirm
+        ]
+        with (
+            patch("slurp.cli.setup.CONFIG_DIR", config_dir),
+            patch("slurp.cli.setup.CONFIG_FILE", config_file),
+            patch("slurp.cli.setup._ask", side_effect=answers),
+        ):
+            result = runner.invoke(app, ["setup"])
+        assert result.exit_code == 0
+        content = config_file.read_text()
+        assert "[profiles.default]" in content
+        assert 'hostname = "cluster.example.edu"' in content
+        assert 'username = "alice"' in content
+        assert "[profiles.default.sync]" in content
+        assert 'remote = "/home/alice/proj"' in content
+        # model defaults are omitted
+        assert "mpi_mode" not in content
+        assert "gpu_flag_style" not in content
+        assert "prologue" not in content
+
+    def test_setup_advanced_and_venv(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "slurp"
+        config_file = config_dir / "profiles.toml"
+        answers = [
+            "jureca",  # name
+            "jureca.fz-juelich.de",  # hostname
+            "alice",  # username
+            "~/.ssh/judoor",  # key_file
+            "",  # proxy_jump
+            "dc-gpu",  # partition
+            "training2625",  # account
+            True,  # advanced confirm
+            "module load Python; module load CUDA",  # prologue
+            "pmix",  # mpi_mode
+            "threads",  # cpu_bind
+            "gpus",  # gpu_flag_style
+            True,  # sync confirm
+            ".",  # sync_local
+            "/p/home/jusers/{username}/jureca/slurp",  # sync_remote
+            True,  # venv confirm
+            "$HOME/.venv",  # venv_path
+            False,  # venv_all_extras
+            "cu121,dev",  # venv_extras
+            True,  # write confirm
+        ]
+        with (
+            patch("slurp.cli.setup.CONFIG_DIR", config_dir),
+            patch("slurp.cli.setup.CONFIG_FILE", config_file),
+            patch("slurp.cli.setup._ask", side_effect=answers),
+        ):
+            result = runner.invoke(app, ["setup"])
+        assert result.exit_code == 0
+        content = config_file.read_text()
+        assert 'prologue = "module load Python; module load CUDA"' in content
+        assert 'mpi_mode = "pmix"' in content
+        assert 'cpu_bind = "threads"' in content
+        assert 'gpu_flag_style = "gpus"' in content
+        assert "[profiles.jureca.venv]" in content
+        assert 'strategy = "uv-sync"' in content
+        assert 'path = "$HOME/.venv"' in content
+        assert 'extras = ["cu121", "dev"]' in content
+
+    def test_setup_venv_all_extras(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "slurp"
+        config_file = config_dir / "profiles.toml"
+        answers = [
+            "default", "h", "u", "", "", "", "",
+            False,  # advanced
+            False,  # sync (skip)
+            True,  # venv
+            "$PROJECT/.venv",  # venv_path
+            True,  # venv_all_extras
+            True,  # write
+        ]
+        with (
+            patch("slurp.cli.setup.CONFIG_DIR", config_dir),
+            patch("slurp.cli.setup.CONFIG_FILE", config_file),
+            patch("slurp.cli.setup._ask", side_effect=answers),
+        ):
+            result = runner.invoke(app, ["setup"])
+        assert result.exit_code == 0
+        content = config_file.read_text()
+        assert "all_extras = true" in content
+        assert "extras = [" not in content  # all_extras supersedes the extras list
+
+    def test_setup_backs_up_existing(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "slurp"
+        config_dir.mkdir()
+        config_file = config_dir / "profiles.toml"
+        config_file.write_text('[profiles.old]\nhostname = "old"\n')
+        answers = [
+            True,  # backup confirm (first prompt since file exists)
+            "new",  # name
+            "new.host",  # hostname
+            "alice",  # username
+            "",  # key_file
+            "",  # proxy_jump
+            "gpu",  # partition
+            "acct",  # account
+            False,  # advanced
+            True, ".", "/home/alice/p",  # sync
+            False,  # venv
+            True,  # write
+        ]
+        with (
+            patch("slurp.cli.setup.CONFIG_DIR", config_dir),
+            patch("slurp.cli.setup.CONFIG_FILE", config_file),
+            patch("slurp.cli.setup._ask", side_effect=answers),
+        ):
+            result = runner.invoke(app, ["setup"])
+        assert result.exit_code == 0
+        backups = list(config_dir.glob("*.bak*"))
+        assert len(backups) == 1
+        assert "old" in backups[0].read_text()
+        assert "[profiles.new]" in config_file.read_text()
+
+    def test_setup_decline_backup_aborts(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "slurp"
+        config_dir.mkdir()
+        config_file = config_dir / "profiles.toml"
+        original = '[profiles.old]\nhostname = "old"\n'
+        config_file.write_text(original)
+        with (
+            patch("slurp.cli.setup.CONFIG_DIR", config_dir),
+            patch("slurp.cli.setup.CONFIG_FILE", config_file),
+            patch("slurp.cli.setup._ask", side_effect=[False]),
+        ):
+            result = runner.invoke(app, ["setup"])
+        assert result.exit_code == 0
+        assert "aborted" in result.output.lower()
+        # existing file untouched
+        assert config_file.read_text() == original
+
+    def test_setup_cancel_write(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "slurp"
+        config_file = config_dir / "profiles.toml"
+        answers = [
+            "default", "h", "u", "", "", "", "",
+            False,  # advanced
+            False,  # sync
+            False,  # venv
+            False,  # write confirm -> cancel
+        ]
+        with (
+            patch("slurp.cli.setup.CONFIG_DIR", config_dir),
+            patch("slurp.cli.setup.CONFIG_FILE", config_file),
+            patch("slurp.cli.setup._ask", side_effect=answers),
+        ):
+            result = runner.invoke(app, ["setup"])
+        assert result.exit_code == 0
+        assert not config_file.exists()
+
+    def test_setup_cancel_no_tty(self, tmp_path: Path) -> None:
+        # questionary's .ask() returns None when stdin is not a TTY. The real
+        # _ask() must translate that into a clean cancellation (exit 1), so we
+        # patch questionary rather than _ask itself.
+        config_dir = tmp_path / "slurp"
+        config_file = config_dir / "profiles.toml"
+        mock_q = MagicMock()
+        mock_q.text.return_value.ask.return_value = None
+        with (
+            patch("slurp.cli.setup.CONFIG_DIR", config_dir),
+            patch("slurp.cli.setup.CONFIG_FILE", config_file),
+            patch("slurp.cli.setup.questionary", mock_q),
+        ):
+            result = runner.invoke(app, ["setup"])
+        assert result.exit_code == 1
+        assert "cancelled" in result.output.lower()
+
+
+class TestSetupHelpers:
+    """Direct unit tests for the pure rendering/validation helpers."""
+
+    def test_valid_profile_name(self) -> None:
+        from slurp.cli.setup import _valid_profile_name
+
+        assert _valid_profile_name("default") is True
+        assert _valid_profile_name("my-cluster_1") is True
+        assert _valid_profile_name("") != True  # noqa: E712
+        assert _valid_profile_name("bad name") != True  # noqa: E712
+        assert _valid_profile_name("bad/name") != True  # noqa: E712
+
+    def test_required_rejects_empty(self) -> None:
+        from slurp.cli.setup import _required
+
+        assert _required("x") is True
+        assert _required("   ") != True  # noqa: E712
+
+    def test_toml_escape(self) -> None:
+        from slurp.cli.setup import _toml_escape
+
+        assert _toml_escape('a"b') == 'a\\"b'
+        assert _toml_escape("a\\b") == "a\\\\b"
+
+    def test_build_toml_omits_defaults(self) -> None:
+        from slurp.cli.setup import _build_toml
+
+        out = _build_toml(
+            {
+                "name": "default",
+                "hostname": "h",
+                "username": "",
+                "key_file": "",
+                "proxy_jump": "",
+                "partition": "",
+                "account": "",
+                "prologue": "",
+                "mpi_mode": "pmi2",
+                "cpu_bind": "cores",
+                "gpu_flag_style": "gres",
+                "sync": False,
+                "venv": False,
+            }
+        )
+        assert out.startswith("[profiles.default]")
+        assert 'hostname = "h"' in out
+        # everything else is default -> omitted
+        assert "mpi_mode" not in out
+        assert "cpu_bind" not in out
+        assert "gpu_flag_style" not in out
+        assert "prologue" not in out
+        assert "sync" not in out
+
+    def test_build_toml_escapes_quotes(self) -> None:
+        from slurp.cli.setup import _build_toml
+
+        out = _build_toml(
+            {
+                "name": "default",
+                "hostname": 'h"ost',
+                "username": "",
+                "key_file": "",
+                "proxy_jump": "",
+                "partition": "",
+                "account": "",
+                "sync": False,
+                "venv": False,
+            }
+        )
+        assert 'hostname = "h\\"ost"' in out

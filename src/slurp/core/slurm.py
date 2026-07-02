@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import structlog
+
 from slurp.domain import (
     JobStatus,
     Profile,
@@ -13,6 +15,8 @@ from slurp.domain import (
     slugify_command,
 )
 from slurp.errors import SlurmError
+
+_log = structlog.get_logger()
 
 
 def _gpu_directive(resources: ResourceRequest, profile: Profile) -> str:
@@ -192,11 +196,14 @@ async def sbatch_submit(
         timeout=15.0,
     )
 
-    # Run sbatch
+    # Run sbatch. check=False so we capture stderr ourselves: raising inside
+    # run() would lose the sbatch rejection reason (e.g. "Invalid account or
+    # account/partition combination") -- the whole point of the SlurmError below.
     exit_code, stdout, stderr = await ssh_manager.run(
         profile,
         f"cd {working_dir} && sbatch '{remote_script}'",
         timeout=30.0,
+        check=False,
     )
 
     # Clean up temp script
@@ -241,7 +248,11 @@ async def sacct_query(
     )
     try:
         _, stdout, stderr = await ssh_manager.run(profile, cmd, timeout=30.0)
-    except Exception:
+    except Exception as exc:
+        # Don't crash reconciliation, but make the failure visible -- a bare
+        # return here previously masked connection/loop errors as "no data",
+        # which surfaced elsewhere as mysterious wait_job() timeouts.
+        _log.warning("sacct query failed", job_ids=job_ids, error=str(exc))
         return {}
 
     results: dict[str, SlurmJobInfo] = {}
@@ -280,7 +291,8 @@ async def squeue_query(
     cmd = f"squeue{user_filter} --format='%i %T' --noheader"
     try:
         _, stdout, _ = await ssh_manager.run(profile, cmd, timeout=15.0)
-    except Exception:
+    except Exception as exc:
+        _log.warning("squeue query failed", user=user, error=str(exc))
         return {}
 
     results: dict[str, JobStatus] = {}

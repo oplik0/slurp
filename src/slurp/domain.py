@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
@@ -102,14 +102,48 @@ class Profile(BaseModel):
     cpu_bind: str = "cores"
     gpu_flag_style: str = "gres"  # "gres" or "gpus"
     sync: SyncConfig | None = None
+    venv: VenvConfig | None = None
 
     class SyncConfig(BaseModel):
         local: str
         remote: str
 
+    class VenvConfig(BaseModel):
+        """Remote venv management strategy.
+
+        When set, slurp ensures the venv is up-to-date on the remote
+        login node before submitting jobs.  The venv is cached on the
+        remote and only rebuilt when ``uv.lock`` changes.
+
+        Example TOML::
+
+            [profiles.jureca.venv]
+            strategy = "uv-sync"
+            path = "$PROJECT/.venv"
+            extras = ["cu121"]
+        """
+
+        strategy: Literal["uv-sync"] = "uv-sync"
+        path: str = "$PROJECT/.venv"
+        extras: list[str] = Field(default_factory=list)
+        all_extras: bool = False
+
     def format_prologue(self) -> str:
         """Return prologue with {account} placeholder substituted."""
         return self.prologue.format(account=self.account or "")
+
+    def format_remote(self) -> str:
+        """Return sync.remote with {account}/{username} placeholders substituted.
+
+        Mirrors format_prologue(): lets templates like
+        ``/p/home/jusers/{username}/jureca/slurp`` resolve without the user
+        hand-editing the path. Returns "" when no sync config is set.
+        """
+        if not self.sync:
+            return ""
+        return self.sync.remote.format(
+            account=self.account or "", username=self.username or ""
+        )
 
 
 class Job(BaseModel):
@@ -130,10 +164,13 @@ class Job(BaseModel):
 
     def refresh(self) -> Job:
         """Query sacct for the current state and return a new Job."""
-        # Implemented in client.py to avoid circular imports
+        # Implemented in client.py to avoid circular imports. Use a context
+        # manager so the background event loop (and SSH connection) is torn
+        # down rather than leaked on every call.
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).refresh_job(self)
+        with SyncClient(profile=self.profile) as c:
+            return c.refresh_job(self)
 
     def wait(
         self,
@@ -144,24 +181,34 @@ class Job(BaseModel):
     ) -> JobResult:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).wait_job(
-            self, timeout=timeout, follow_logs=follow_logs, poll_interval=poll_interval
-        )
+        with SyncClient(profile=self.profile) as c:
+            return c.wait_job(
+                self, timeout=timeout, follow_logs=follow_logs, poll_interval=poll_interval
+            )
 
     def logs(self, *, follow: bool = False, tail: int = 100) -> Any:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).job_logs(self, follow=follow, tail=tail)
+        # Generator: the client lives for the lifetime of iteration and is
+        # closed on exhaustion (or GC). Eagerly wrapping in `with` would tear
+        # down the SSH connection before the caller consumes any lines.
+        client = SyncClient(profile=self.profile)
+        try:
+            yield from client.job_logs(self, follow=follow, tail=tail)
+        finally:
+            client.close()
 
     def cancel(self) -> Job:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).cancel_job(self)
+        with SyncClient(profile=self.profile) as c:
+            return c.cancel_job(self)
 
     def result(self) -> JobResult:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).job_result(self)
+        with SyncClient(profile=self.profile) as c:
+            return c.job_result(self)
 
 
 class JobResult(BaseModel):
@@ -190,7 +237,8 @@ class ArrayJob(BaseModel):
     def watch(self) -> None:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).watch_array(self)
+        with SyncClient(profile=self.profile) as c:
+            return c.watch_array(self)
 
     def logs(
         self,
@@ -201,19 +249,23 @@ class ArrayJob(BaseModel):
     ) -> Any:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).array_logs(
-            self, task_id=task_id, follow=follow, tail=tail
-        )
+        client = SyncClient(profile=self.profile)
+        try:
+            yield from client.array_logs(self, task_id=task_id, follow=follow, tail=tail)
+        finally:
+            client.close()
 
     def cancel(self) -> ArrayJob:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).cancel_array(self)
+        with SyncClient(profile=self.profile) as c:
+            return c.cancel_array(self)
 
     def cancel_task(self, task_id: int) -> ArrayJob:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).cancel_array_task(self, task_id)
+        with SyncClient(profile=self.profile) as c:
+            return c.cancel_array_task(self, task_id)
 
     def results(
         self,
@@ -223,14 +275,14 @@ class ArrayJob(BaseModel):
     ) -> list[JobResult]:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).array_results(
-            self, timeout=timeout, poll_interval=poll_interval
-        )
+        with SyncClient(profile=self.profile) as c:
+            return c.array_results(self, timeout=timeout, poll_interval=poll_interval)
 
     def tasks(self) -> list[Job]:
         from slurp.client import SyncClient
 
-        return SyncClient(profile=self.profile).array_tasks(self)
+        with SyncClient(profile=self.profile) as c:
+            return c.array_tasks(self)
 
 
 class JobRecord(BaseModel):

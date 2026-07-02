@@ -24,6 +24,7 @@ from .cancel import cancel_cmd
 from .config import app as config_app
 from .logs import logs_cmd
 from .pull import pull_cmd
+from .setup import setup_cmd
 from .status import list_cmd, status_cmd
 from .submit import _split_command_args, submit_array_cmd, submit_cmd
 from .sync import sync_cmd
@@ -67,6 +68,7 @@ app.command("watch")(watch_cmd)
 app.command("sync")(sync_cmd)
 app.command("pull")(pull_cmd)
 app.command("webui")(webui_cmd)
+app.command("setup")(setup_cmd)
 app.add_typer(config_app, name="config")
 
 

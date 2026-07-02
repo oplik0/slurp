@@ -42,6 +42,19 @@ uv sync --extra dev
 
 ### 1. Configure a profile
 
+The fastest way to get started is the interactive setup wizard, which writes
+`~/.config/slurp/profiles.toml` for you:
+
+```bash
+slurp setup
+```
+
+It walks you through connection details, SLURM defaults, and the optional
+`sync`/`venv` sub-tables. If a config already exists it offers to back it up
+first.
+
+You can also add profiles individually:
+
 ```bash
 slurp config add-profile my-cluster \
   --hostname gpu-cluster.university.edu \
@@ -80,6 +93,7 @@ slurp pull 12345                   # Download outputs to ./outputs/12345/
 
 | Command | Description |
 |---------|-------------|
+| `slurp setup` | Interactively create `~/.config/slurp/profiles.toml` |
 | `slurp submit <command>` | Fire-and-forget job submission |
 | `slurp run <command>` | Blocking submit with live log streaming |
 | `slurp submit-array <template> --key v1,v2,...` | Submit a SLURM job array |

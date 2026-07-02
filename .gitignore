@@ -34,3 +34,6 @@ Thumbs.db
 
 # Environment
 .env
+
+# slurp task runtime (payloads, results, shared objects)
+._slurp/
